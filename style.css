@@ -12081,14 +12081,60 @@ textarea.et-mem-save-snippet-edit::placeholder {
    theme variables so cards follow custom themes.
    ──────────────────────────────────────────────────────────────── */
 
-/* Leading bubbles carry no footer, so even out their bottom padding */
+/* Leading bubbles carry no footer, so even out their bottom padding. Bubbles in
+   a message sit a little closer than separate messages, scaled from the user's
+   Paragraph Spacing (.et-message-body already contributes a 3px gap). */
 .et-bubble-char.et-bubble-part {
     padding-bottom: 12px;
+    margin-bottom: calc(var(--et-paragraph-spacing, 10px) * 0.6 - 3px);
 }
 
 .et-message-user .et-bubble.et-bubble-part {
     padding-bottom: 11px;
-    margin-bottom: 3px;
+    margin-bottom: calc(var(--et-paragraph-spacing, 10px) * 0.6);
+}
+
+/* Consecutive user messages read as one group: the footer (time, name, receipt)
+   shows only on the last, and the group sits as tight as bubbles in a message */
+.et-message.et-message-grouped {
+    margin-bottom: calc(var(--et-paragraph-spacing, 10px) * -0.4);
+}
+
+.et-message-grouped .et-bubble-main > .et-message-footer {
+    display: none;
+}
+
+.et-message-grouped .et-bubble-main:hover .et-msg-dots-hover {
+    opacity: 0.8;
+}
+
+/* User bubbles have no visible surface (see .et-bubble-user above), so whatever
+   is inside them must share one right edge: text blocks hug the right side even
+   when the footer makes the bubble wider, and cards keep the bubble's 16px inset */
+.et-message-user .et-bubble {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.et-message-user .et-bubble > .et-message-footer {
+    align-self: stretch;
+}
+
+.et-message.et-message-user .et-bubble.et-bubble-card {
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+.et-message.et-message-user .et-bubble-card .et-message-footer {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+/* Each bubble of a multi-bubble reply sizes to its own text instead of
+   stretching to the widest bubble in the message */
+.et-message-char .et-message-body {
+    align-items: flex-start;
 }
 
 /* Bubbles revealed one at a time when a multi-bubble reply arrives */

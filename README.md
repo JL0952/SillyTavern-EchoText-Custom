@@ -5,8 +5,8 @@ A personal fork of [SillyTavern-EchoText](https://github.com/mattjaybe/SillyTave
 ## Modifications
 
 - Modified EchoText's prompting logic.
-- Added support for reading the character's `first_mes` and recent SillyTavern story context.
-- Added a character limit for imported story context.
+- Added support for reading the character's `first_mes` and recent SillyTavern story context and a character limit for story context.
+- Added money transfers, multi-bubble replies, photo messages, consecutive sending, and verbosity-based text counts.
 
 ## Credits
 

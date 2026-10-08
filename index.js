@@ -2309,7 +2309,7 @@
     function buildMessageFormatPrompt(charName, userName) {
         return [
             `MESSAGES: Put each text on its own line — every line reaches ${userName} as a separate message bubble.`,
-            `PHOTOS: ${charName} can send photos. Write a photo on its own line as <photo>what the photo shows</photo> — a short, concrete description of the picture, written in the same language as the conversation — and ${userName} sees it as an actual picture. Send one whenever ${charName} naturally would, such as when asked for a picture, but never use it to describe ${charName}'s own actions. A <photo> from ${userName} is a picture they sent: react to what it shows.`,
+            `PHOTOS: ${charName} can send photos. Write a photo on its own line as <photo>what the photo shows</photo> — a short, concrete description of the picture, written in the same language as the conversation — and ${userName} sees it as an actual picture. Write the description as a neutral caption of what is visible, with no first- or second-person pronouns: refer to people by name (${charName}, ${userName}) instead of I/me/my/you. Send one whenever ${charName} naturally would, such as when asked for a picture, but never use it to describe ${charName}'s own actions. A <photo> from ${userName} is a picture they sent: react to what it shows.`,
             `TRANSFERS: ${charName} can send ${userName} money by writing <transfer>amount</transfer> on its own line, with the amount as a plain number. When ${userName} sends ${charName} a <transfer>, ${charName} can accept it with <transfer_accept/> or decline it with <transfer_decline/> on its own line, or leave it pending for now. A <transfer_accept> or <transfer_decline> from ${userName} means they accepted or declined ${charName}'s transfer. Only send or answer transfers when it fits the story.`
         ].join('\n');
     }
@@ -6025,6 +6025,10 @@
         return info;
     }
 
+    // Consecutive user messages sent within this window render as one group: only
+    // the last shows the footer (time, name, receipt)
+    const MESSAGE_GROUP_WINDOW_MS = 5 * 60 * 1000;
+
     // Character messages whose bubbles already played their arrival sequence,
     // keyed by send_date, so later re-renders show them at once.
     const staggeredMessageKeys = new Set();
@@ -6313,6 +6317,9 @@
             const contents = parts.map((part, j) => buildPartContentHtml(part, transfers.get(`${index}:${j}`), isUser));
             const mainPart = parts[parts.length - 1];
             const mainCardClass = partBubbleClass(mainPart);
+            const next = history[index + 1];
+            const groupedWithNext = isUser && !!next?.is_user
+                && (next.send_date || 0) - (msg.send_date || 0) < MESSAGE_GROUP_WINDOW_MS;
             const msgDate = new Date(msg.send_date || Date.now());
             const time = msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
             const fullDateToolip = msgDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -6321,10 +6328,11 @@
             if (isUser) {
                 const safeUserName = DOMPurify.sanitize(userName, { ALLOWED_TAGS: [] });
                 bubbleHtml = `
-                <div class="et-message et-message-user" data-index="${index}">
+                <div class="et-message et-message-user${groupedWithNext ? ' et-message-grouped' : ''}" data-index="${index}">
                     ${buildLeadingPartBubblesHtml(parts, contents, 'et-bubble-user', index, true)}
                     <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}">
                         ${contents[contents.length - 1]}
+                        ${groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
                         <div class="et-message-footer">
                             <span class="et-message-time" title="${fullDateToolip}">${time}</span>
                             <span class="et-user-name">${safeUserName}</span>
@@ -6473,7 +6481,9 @@
             const btn = jQuery(this);
             const msgIndex = parseInt(btn.data('index'));
             const isUser = btn.data('is-user') === 1 || btn.data('is-user') === '1';
-            const partIndex = btn.hasClass('et-part-dots-btn') ? parseInt(btn.data('part')) : null;
+            // A grouped message's hover button stands in for its hidden footer menu
+            const isPartMenu = btn.hasClass('et-part-dots-btn') && !btn.hasClass('et-msg-dots-hover');
+            const partIndex = isPartMenu ? parseInt(btn.data('part')) : null;
             toggleDotsMenu(btn, msgIndex, isUser, tethered, partIndex);
         });
 
