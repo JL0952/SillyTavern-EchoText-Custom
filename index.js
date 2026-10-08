@@ -5937,9 +5937,10 @@
         return visible.length ? visible : [{ type: 'text', text: '' }];
     }
 
+    /** A photo shows only its frame; tapping it reveals the description inside. */
     function buildPhotoCardHtml(desc) {
         const safeDesc = escapeHtml(desc);
-        return `<div class="et-photo-card"${safeDesc ? ` title="${safeDesc}"` : ''}><div class="et-photo-card-frame"><i class="fa-regular fa-image"></i></div><div class="et-photo-card-caption">${safeDesc || 'Photo'}</div></div>`;
+        return `<div class="et-photo-card" role="button" tabindex="0" title="Tap to view"><div class="et-photo-card-frame"><i class="fa-regular fa-image et-photo-card-icon"></i><div class="et-photo-card-caption"><span>${safeDesc || 'Photo'}</span></div></div></div>`;
     }
 
     /**
@@ -6513,6 +6514,11 @@
                 saveChatHistory(h);
                 updateSwipeInPlace(msgIndex, h);
             }
+        });
+
+        inner.find('.et-photo-card').on('click', function (e) {
+            e.stopPropagation();
+            jQuery(this).toggleClass('et-photo-card-open');
         });
 
         inner.find('.et-transfer-actionable').on('click', function (e) {

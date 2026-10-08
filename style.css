@@ -12096,26 +12096,19 @@ textarea.et-mem-save-snippet-edit::placeholder {
     animation: et-msg-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Card bubbles (photo, transfer) hug their card */
-.et-bubble.et-bubble-card,
-.et-message-user .et-bubble.et-bubble-card {
-    padding: 6px;
-}
-
-.et-bubble-card .et-message-footer {
-    padding-left: 8px;
-    padding-right: 8px;
-}
-
 .et-photo-card {
     width: min(232px, 62vw);
     border-radius: 16px;
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.10);
     background: rgba(0, 0, 0, 0.18);
+    cursor: pointer;
+    user-select: none;
 }
 
+/* Always 4:3 — a long description scrolls inside the frame instead of stretching it */
 .et-photo-card-frame {
+    position: relative;
     aspect-ratio: 4 / 3;
     display: flex;
     align-items: center;
@@ -12132,14 +12125,43 @@ textarea.et-mem-save-snippet-edit::placeholder {
     filter: drop-shadow(0 0 10px color-mix(in srgb, var(--et-theme-color) 50%, transparent));
 }
 
+/* The description stays hidden until the photo is tapped, then fills the frame */
 .et-photo-card-caption {
-    padding: 8px 10px 9px;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    color: var(--et-text);
-    background: rgba(255, 255, 255, 0.04);
-    word-wrap: break-word;
-    overflow-wrap: break-word;
+    display: none;
+    position: absolute;
+    inset: 0;
+    flex-direction: column;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 14px 16px;
+    font-size: 0.84rem;
+    line-height: 1.5;
+    text-align: center;
+    color: rgba(255, 255, 255, 0.94);
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+    overflow-wrap: anywhere;
+}
+
+/* margin:auto centres a short description, yet a long one still scrolls from its first line */
+.et-photo-card-caption > span {
+    margin: auto 0;
+}
+
+.et-photo-card-caption::-webkit-scrollbar {
+    width: 4px;
+}
+
+.et-photo-card-caption::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.35);
+    border-radius: 4px;
+}
+
+.et-photo-card-open .et-photo-card-icon {
+    display: none;
+}
+
+.et-photo-card-open .et-photo-card-caption {
+    display: flex;
 }
 
 /* Editing shows the raw text, line breaks included */
@@ -12277,10 +12299,10 @@ textarea.et-mem-save-snippet-edit::placeholder {
         0 4px 14px color-mix(in srgb, var(--et-theme-color) 45%, transparent);
 }
 
-/* A transfer stands on its own, as in messaging apps: its bubble drops the glass
-   surface and the footer (name, time, actions) sits right under the card */
-.et-message .et-bubble.et-bubble-transfer,
-.et-message .et-bubble.et-bubble-transfer:hover {
+/* Cards (photos, transfers) stand on their own, as in messaging apps: their bubble
+   drops the glass surface and the footer (name, time, actions) sits under the card */
+.et-message .et-bubble.et-bubble-card,
+.et-message .et-bubble.et-bubble-card:hover {
     background: transparent;
     border: none;
     box-shadow: none;
@@ -12289,7 +12311,7 @@ textarea.et-mem-save-snippet-edit::placeholder {
     padding: 0;
 }
 
-.et-message .et-bubble-transfer .et-message-footer {
+.et-message .et-bubble-card .et-message-footer {
     border-top: none;
     margin-top: 4px;
     padding: 2px 4px 0;
