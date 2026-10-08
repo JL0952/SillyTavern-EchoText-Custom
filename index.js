@@ -95,8 +95,9 @@
     let fabDragging = false;
     let loadedFontFamily = null;
     let showTypingIndicator = false;
-    // When on, the next message the user sends is a photo: the typed text is its description
-    let photoComposeMode = false;
+    // When set ('photo' | 'transfer'), the next message the user sends is that kind
+    // of content and the typed text is its description / amount
+    let composeMode = null;
     // Reply scheduling: the user can send several texts in a row and the character
     // answers once they pause (see scheduleCharacterReply)
     let replyTimer = null;
@@ -105,7 +106,10 @@
     // Completion requests in flight — once the model is writing, a new user text
     // waits for a follow-up reply instead of cancelling it
     let activeCompletionRequests = 0;
-    const PHOTO_PLACEHOLDER = 'Describe the photo you\'re sending...';
+    const COMPOSE_MODES = {
+        photo: { label: 'Photo', icon: 'fa-image', placeholder: 'Describe the photo you\'re sending...' },
+        transfer: { label: 'Transfer', icon: 'fa-money-bill-transfer', placeholder: 'Amount to transfer' },
+    };
     let hasUnreadCharacterMessage = false;
     let emotionSystem = null;
     let proactiveMessaging = null;
@@ -1583,8 +1587,8 @@
             jQuery('#et-panel').removeClass('et-panel-no-char');
             jQuery('#et-char-name').html(`Group: ${escapeHtml(charNames)}<i class="fa-solid fa-chevron-down et-char-name-caret" aria-hidden="true"></i>`);
             jQuery('#et-input').attr('placeholder', `Message all: ${charNames}...`).prop('disabled', false);
-            jQuery('#et-send-btn, #et-photo-btn').prop('disabled', false);
-            setPhotoComposeMode(false);
+            jQuery('#et-send-btn, #et-attach-btn').prop('disabled', false);
+            setComposeMode(null);
             jQuery('#et-emotion-indicator').addClass('et-emotion-indicator-hidden');
             updatePanelStatusRow();
             updateImageGenerationVisibility();
@@ -1608,8 +1612,8 @@
         jQuery('#et-char-name').html(`${escapeHtml(hasChar ? charName : 'Choose A Character')}<i class="fa-solid fa-chevron-down et-char-name-caret" aria-hidden="true"></i>`);
         jQuery('#et-char-avatar-wrap').replaceWith(buildAvatarHtml(charName, '', 'et-char-avatar-wrap'));
         jQuery('#et-input').attr('placeholder', hasChar ? `Text ${charName}...` : 'Text a character...').prop('disabled', !hasChar);
-        jQuery('#et-send-btn, #et-photo-btn').prop('disabled', !hasChar);
-        setPhotoComposeMode(false);
+        jQuery('#et-send-btn, #et-attach-btn').prop('disabled', !hasChar);
+        setComposeMode(null);
         jQuery('#et-emotion-indicator').toggleClass('et-emotion-indicator-hidden', !emotionEnabled);
 
         if (emotionEnabled) {
@@ -2305,7 +2309,8 @@
     function buildMessageFormatPrompt(charName, userName) {
         return [
             `MESSAGES: Put each text on its own line — every line reaches ${userName} as a separate message bubble.`,
-            `PHOTOS: ${charName} can send photos. Write a photo on its own line as <photo>what the photo shows</photo> — a short, concrete description of the picture, written in the same language as the conversation — and ${userName} sees it as an actual picture. Send one whenever ${charName} naturally would, such as when asked for a picture, but never use it to describe ${charName}'s own actions. A <photo> from ${userName} is a picture they sent: react to what it shows.`
+            `PHOTOS: ${charName} can send photos. Write a photo on its own line as <photo>what the photo shows</photo> — a short, concrete description of the picture, written in the same language as the conversation — and ${userName} sees it as an actual picture. Send one whenever ${charName} naturally would, such as when asked for a picture, but never use it to describe ${charName}'s own actions. A <photo> from ${userName} is a picture they sent: react to what it shows.`,
+            `TRANSFERS: ${charName} can send ${userName} money by writing <transfer>amount</transfer> on its own line, with the amount as a plain number. When ${userName} sends ${charName} a <transfer>, ${charName} can accept it with <transfer_accept/> or decline it with <transfer_decline/> on its own line, or leave it pending for now. A <transfer_accept> or <transfer_decline> from ${userName} means they accepted or declined ${charName}'s transfer. Only send or answer transfers when it fits the story.`
         ].join('\n');
     }
 
@@ -3267,7 +3272,7 @@
         // rather than patched in place
         const newParts = getMessageDisplayParts(msg);
         if (!msgEl.length || newParts.length > 1 || newParts[0].type !== 'text'
-                || msgEl.find('.et-bubble-part, .et-bubble-photo').length) {
+                || msgEl.find('.et-bubble-part, .et-bubble-card').length) {
             renderMessages(h, true);
             return;
         }
@@ -4697,8 +4702,8 @@
         jQuery('#et-panel').removeClass('et-panel-no-char');
         jQuery('#et-char-name').html(`${escapeHtml(charName)}<i class="fa-solid fa-chevron-down et-char-name-caret" aria-hidden="true"></i>`);
         jQuery('#et-input').attr('placeholder', `Text ${charName}...`).prop('disabled', false);
-        jQuery('#et-send-btn, #et-photo-btn').prop('disabled', false);
-        setPhotoComposeMode(false);
+        jQuery('#et-send-btn, #et-attach-btn').prop('disabled', false);
+        setComposeMode(null);
         cancelScheduledReply();
 
         // Rebuild avatar in the header using the group module's builder
@@ -4810,7 +4815,7 @@
 
             <div class="et-input-bar">
                 <div class="et-input-wrap">
-                    <button class="et-photo-btn" id="et-photo-btn" type="button" title="Send a photo — describe what it shows"${hasChar ? '' : ' disabled'}><i class="fa-regular fa-image"></i></button>
+                    <button class="et-attach-btn" id="et-attach-btn" type="button" title="Photo or transfer"${hasChar ? '' : ' disabled'}><i class="fa-solid fa-plus"></i></button>
                     <textarea class="et-input" id="et-input" placeholder="${inCombine ? `Message all: ${charName}...` : (hasChar ? `Text ${charName}...` : 'Text a character...')}" rows="1"${hasChar ? '' : ' disabled'}></textarea>
                 </div>
                 <button class="et-send-btn" id="et-send-btn" title="Send message"${hasChar ? '' : ' disabled'}>
@@ -5127,10 +5132,16 @@
 
         jQuery('#et-send-btn').on('click', handleSend);
 
-        photoComposeMode = false;
-        jQuery('#et-photo-btn').on('click', function () {
-            setPhotoComposeMode(!photoComposeMode);
-            jQuery('#et-input').trigger('focus');
+        composeMode = null;
+        // "+" opens the attach menu; while composing a photo/transfer it cancels instead
+        jQuery('#et-attach-btn').on('click', function (e) {
+            e.stopPropagation();
+            if (composeMode) {
+                setComposeMode(null);
+                jQuery('#et-input').trigger('focus');
+            } else {
+                toggleAttachMenu(jQuery(this));
+            }
         });
 
         jQuery('#et-input').on('keydown', function (e) {
@@ -5240,9 +5251,20 @@
             return;
         }
 
-        // Photo mode needs a description; an empty send doesn't fall through to a nudge
-        const sendingPhoto = photoComposeMode;
-        if (sendingPhoto && !text) return;
+        // Photo / transfer mode needs content; an empty send doesn't fall through to a nudge
+        const mode = composeMode;
+        if (mode && !text) return;
+        let mes = text;
+        if (mode === 'photo') {
+            mes = `<photo>${text.replace(/\s*\n\s*/g, ' ')}</photo>`;
+        } else if (mode === 'transfer') {
+            const amount = parseTransferAmount(text);
+            if (!amount) {
+                toastr.warning('Enter an amount greater than 0, like 52 or 13.14.');
+                return;
+            }
+            mes = `<transfer>${amount}</transfer>`;
+        }
 
         // Empty send — reply right away (skipping any pending pause), or nudge a
         // continuation from the last message
@@ -5253,16 +5275,32 @@
         }
 
         input.val('').css('height', 'auto');
-        if (sendingPhoto) setPhotoComposeMode(false);
+        if (mode) setComposeMode(null);
         if (isGenerating) updateSendButton(true);
 
         // Process user message for emotion analysis
-        processMessageEmotion(text, true);
+        if (!mode) processMessageEmotion(text, true);
 
-        const history = getChatHistory();
-        const userMsg = {
+        const userMsg = createUserMessage(mes);
+        // Detect memory-worthy spans in the user's message for manual highlighting
+        if (!mode && memorySystem && settings.memoryEnabled && settings.memoryAutoExtract) {
+            try {
+                const candidates = memorySystem.detectHighlightableText(text);
+                if (candidates && candidates.length > 0) userMsg.memoryHighlights = candidates;
+            } catch (e) { /* ignore detection errors */ }
+        }
+        const newHistory = postUserMessage(userMsg);
+
+        // Schedule a probabilistic character reaction — fire-and-forget, independent
+        // of the generation pipeline. The timing jitter lands naturally after the
+        // "read" receipt and before the typing indicator appears.
+        if (!mode) maybeAddCharacterReaction(newHistory.length - 1, text);
+    }
+
+    function createUserMessage(mes) {
+        return {
             is_user: true,
-            mes: sendingPhoto ? `<photo>${text.replace(/\s*\n\s*/g, ' ')}</photo>` : text,
+            mes,
             send_date: Date.now(),
             meta: {
                 receipt: {
@@ -5271,27 +5309,42 @@
                 }
             }
         };
-        // Detect memory-worthy spans in the user's message for manual highlighting
-        if (!sendingPhoto && memorySystem && settings.memoryEnabled && settings.memoryAutoExtract) {
-            try {
-                const candidates = memorySystem.detectHighlightableText(text);
-                if (candidates && candidates.length > 0) userMsg.memoryHighlights = candidates;
-            } catch (e) { /* ignore detection errors */ }
-        }
-        const newHistory = [...history, userMsg];
+    }
+
+    /** Appends a user message, renders it, and schedules the character's reply. */
+    function postUserMessage(userMsg) {
+        const newHistory = [...getChatHistory(), userMsg];
         saveChatHistory(newHistory);
         setFabUnreadIndicator(false);
         if (isTetheredMode()) {
             markProactiveUserActivity(getCharacterKey(), Date.now());
         }
         renderMessages(newHistory);
-
-        // Schedule a probabilistic character reaction — fire-and-forget, independent
-        // of the generation pipeline. The timing jitter lands naturally after the
-        // "read" receipt and before the typing indicator appears.
-        maybeAddCharacterReaction(newHistory.length - 1, text);
-
         scheduleCharacterReply();
+        return newHistory;
+    }
+
+    /** "52.00" for a valid positive amount (up to two decimals), else null. */
+    function parseTransferAmount(text) {
+        const cleaned = String(text).replace(/[¥￥$,，\s元块]/g, '');
+        if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
+        const value = Number(cleaned);
+        return value > 0 ? value.toFixed(2) : null;
+    }
+
+    /**
+     * Accepts or declines the character's transfer from its card: posts the user's
+     * response message, which settles the card, and lets the character react.
+     */
+    function respondToTransfer(accept, amount) {
+        if (isGenerating && !replyInProgress) {
+            toastr.info('Wait for the current reply to finish.');
+            return;
+        }
+        // Same as a new text: a reply still in its read/typing delays restarts
+        if (isGenerating && activeCompletionRequests === 0 && abortController) abortController.abort();
+        const tag = accept ? 'transfer_accept' : 'transfer_decline';
+        postUserMessage(createUserMessage(`<${tag}>${amount}</${tag}>`));
     }
 
     // ── Reply scheduling ─────────────────────────────────────────────────────
@@ -5369,23 +5422,108 @@
         return indices;
     }
 
-    /** Toggles photo compose mode: the photo button lights up and the placeholder asks for a description. */
-    function setPhotoComposeMode(on) {
-        photoComposeMode = !!on;
+    /**
+     * Enters a compose mode ('photo' | 'transfer') or leaves it (null): the attach
+     * button shows the mode's icon (tap to cancel) and the placeholder asks for
+     * the description / amount.
+     */
+    function setComposeMode(mode) {
+        composeMode = COMPOSE_MODES[mode] ? mode : null;
+        const config = COMPOSE_MODES[composeMode];
         const input = jQuery('#et-input');
-        jQuery('#et-photo-btn').toggleClass('et-photo-btn-active', photoComposeMode)
-            .attr('title', photoComposeMode ? 'Cancel photo' : 'Send a photo — describe what it shows');
-        jQuery('.et-input-wrap').toggleClass('et-input-wrap-photo', photoComposeMode);
-        if (photoComposeMode) {
-            if (input.attr('placeholder') !== PHOTO_PLACEHOLDER) input.data('et-placeholder', input.attr('placeholder'));
-            input.attr('placeholder', PHOTO_PLACEHOLDER);
+        const placeholders = Object.values(COMPOSE_MODES).map(m => m.placeholder);
+        jQuery('#et-attach-btn')
+            .toggleClass('et-attach-btn-active', !!config)
+            .attr('title', config ? `Cancel ${config.label.toLowerCase()}` : 'Photo or transfer')
+            .html(`<i class="fa-solid ${config ? config.icon : 'fa-plus'}"></i>`);
+        jQuery('.et-input-wrap').toggleClass('et-input-wrap-compose', !!config);
+        if (config) {
+            if (!placeholders.includes(input.attr('placeholder'))) input.data('et-placeholder', input.attr('placeholder'));
+            input.attr('placeholder', config.placeholder);
+            if (composeMode === 'transfer') input.attr('inputmode', 'decimal');
+            else input.removeAttr('inputmode');
         } else {
             // Restore only if nothing (e.g. a character switch) has replaced the placeholder meanwhile
-            if (input.attr('placeholder') === PHOTO_PLACEHOLDER && input.data('et-placeholder') !== undefined) {
+            if (placeholders.includes(input.attr('placeholder')) && input.data('et-placeholder') !== undefined) {
                 input.attr('placeholder', input.data('et-placeholder'));
             }
-            input.removeData('et-placeholder');
+            input.removeData('et-placeholder').removeAttr('inputmode');
         }
+    }
+
+    /** Opens the attach menu (Photo / Transfer) above the "+" button, styled like the message menu. */
+    function toggleAttachMenu(btn) {
+        if (jQuery('.et-attach-menu').length) {
+            closeAllDotMenus();
+            return;
+        }
+        closeAllDotMenus();
+        const itemsHtml = Object.entries(COMPOSE_MODES).map(([id, m]) =>
+            `<button class="et-dots-item" data-mode="${id}"><i class="fa-solid ${m.icon}"></i><span>${m.label}</span></button>`
+        ).join('');
+        const menu = jQuery(`<div class="et-dots-menu et-attach-menu">${itemsHtml}</div>`);
+        jQuery('#et-panel').append(menu);
+
+        const btnRect = btn[0].getBoundingClientRect();
+        const panelRect = document.getElementById('et-panel').getBoundingClientRect();
+        const left = Math.max(8, btnRect.left - panelRect.left - 6);
+        const bottom = panelRect.bottom - btnRect.top + 10;
+        menu.css({ left: left + 'px', bottom: bottom + 'px', top: 'auto', 'transform-origin': 'bottom left' });
+        btn.addClass('et-attach-open');
+        requestAnimationFrame(() => menu.addClass('et-dots-menu-open'));
+
+        setTimeout(() => {
+            jQuery(document).one('click.et-attach-outside', function (e) {
+                if (!jQuery(e.target).closest('.et-attach-menu').length) closeAllDotMenus();
+            });
+        }, 0);
+
+        menu.find('.et-dots-item').on('click', function (e) {
+            e.stopPropagation();
+            const mode = jQuery(this).data('mode');
+            closeAllDotMenus();
+            setComposeMode(mode);
+            jQuery('#et-input').trigger('focus');
+        });
+    }
+
+    /** Accept / Decline menu for a pending transfer from the character, anchored to its card. */
+    function openTransferResponseMenu(card) {
+        closeAllDotMenus();
+        const amount = card.attr('data-amount') || '';
+        const menu = jQuery(`
+            <div class="et-dots-menu et-transfer-menu">
+                <button class="et-dots-item" data-accept="1"><i class="fa-solid fa-circle-check"></i><span>Accept ${escapeHtml(RichMessages.formatAmount(amount))}</span></button>
+                <button class="et-dots-item et-dots-item-delete" data-accept="0"><i class="fa-solid fa-arrow-rotate-left"></i><span>Decline</span></button>
+            </div>`);
+        jQuery('#et-panel').append(menu);
+
+        const cardRect = card[0].getBoundingClientRect();
+        const panelRect = document.getElementById('et-panel').getBoundingClientRect();
+        const menuW = 160;
+        const menuH = menu.outerHeight() || 90;
+        const left = Math.max(8, Math.min(panelRect.width - menuW - 8, cardRect.left - panelRect.left));
+        let top = cardRect.bottom - panelRect.top + 6;
+        if (top + menuH > panelRect.height - 8) {
+            top = cardRect.top - panelRect.top - menuH - 6;
+            menu.css('transform-origin', 'bottom left');
+        } else {
+            menu.css('transform-origin', 'top left');
+        }
+        menu.css({ left: left + 'px', top: Math.max(8, top) + 'px' });
+        requestAnimationFrame(() => menu.addClass('et-dots-menu-open'));
+
+        setTimeout(() => {
+            jQuery(document).one('click.et-transfer-outside', function (e) {
+                if (!jQuery(e.target).closest('.et-transfer-menu').length) closeAllDotMenus();
+            });
+        }, 0);
+
+        menu.find('.et-dots-item').on('click', function (e) {
+            e.stopPropagation();
+            closeAllDotMenus();
+            respondToTransfer(jQuery(this).data('accept') === 1, amount);
+        });
     }
 
     function updateSendButton(generating) {
@@ -5804,21 +5942,86 @@
         return `<div class="et-photo-card"${safeDesc ? ` title="${safeDesc}"` : ''}><div class="et-photo-card-frame"><i class="fa-regular fa-image"></i></div><div class="et-photo-card-caption">${safeDesc || 'Photo'}</div></div>`;
     }
 
-    /** Inner content of one bubble: formatted text or a photo card. */
-    function buildPartContentHtml(part) {
-        return part.type === 'photo'
-            ? buildPhotoCardHtml(part.desc)
-            : `<div class="et-bubble-text">${formatMessageText(part.text)}</div>`;
+    /**
+     * A transfer or transfer-response card. `transfer` is the part's entry from
+     * resolveTransfers(): its status, and the amount a response settled.
+     */
+    function buildTransferCardHtml(part, transfer, isUser) {
+        const amount = transfer?.amount || part.amount;
+        let state, icon, label;
+        let actionable = false;
+        if (part.type === 'transfer') {
+            state = transfer?.status || 'pending';
+            icon = { accepted: 'fa-circle-check', declined: 'fa-arrow-rotate-left' }[state] || 'fa-money-bill-transfer';
+            // Only a pending transfer from the character waits on the user
+            actionable = state === 'pending' && !isUser;
+            label = { accepted: 'Accepted', declined: 'Declined' }[state] || (actionable ? 'Tap to accept' : 'Pending');
+        } else {
+            const accepted = part.type === 'transfer_accept';
+            state = accepted ? 'accepted' : 'declined';
+            icon = accepted ? 'fa-circle-check' : 'fa-arrow-rotate-left';
+            label = accepted ? 'Received' : 'Declined';
+        }
+        const amountText = escapeHtml(RichMessages.formatAmount(amount) || 'Transfer');
+        const actionAttrs = actionable ? ` data-amount="${escapeHtml(amount)}" role="button" tabindex="0"` : '';
+        return `<div class="et-transfer-card et-transfer-${state}${actionable ? ' et-transfer-actionable' : ''}"${actionAttrs}><div class="et-transfer-body"><div class="et-transfer-icon"><i class="fa-solid ${icon}"></i></div><div class="et-transfer-info"><div class="et-transfer-amount">${amountText}</div><div class="et-transfer-status">${label}</div></div></div><div class="et-transfer-footer">Transfer</div></div>`;
+    }
+
+    /** Inner content of one bubble: formatted text, a photo card, or a transfer card. */
+    function buildPartContentHtml(part, transfer, isUser) {
+        if (part.type === 'photo') return buildPhotoCardHtml(part.desc);
+        if (part.type !== 'text') return buildTransferCardHtml(part, transfer, isUser);
+        return `<div class="et-bubble-text">${formatMessageText(part.text)}</div>`;
+    }
+
+    /** Extra bubble classes for a part: cards get a snug, card-hugging bubble. */
+    function partBubbleClass(part) {
+        if (part.type === 'text') return '';
+        // Transfers and their accept/decline responses share the standalone card style
+        const kind = part.type.startsWith('transfer') ? 'transfer' : part.type;
+        return ` et-bubble-card et-bubble-${kind}`;
     }
 
     /**
      * Bubbles shown before a message's main (footer-bearing) bubble — one per part
      * except the last, which goes in the main bubble itself.
      */
-    function buildLeadingPartBubblesHtml(parts, sideClass) {
-        return parts.slice(0, -1).map(part =>
-            `<div class="et-bubble ${sideClass} et-bubble-part${part.type === 'photo' ? ' et-bubble-photo' : ''}">${buildPartContentHtml(part)}</div>`
+    function buildLeadingPartBubblesHtml(parts, contents, sideClass, msgIndex, isUser) {
+        return parts.slice(0, -1).map((part, j) =>
+            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}">${contents[j]}<button class="et-part-dots-btn" data-index="${msgIndex}" data-part="${j}" data-is-user="${isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
         ).join('');
+    }
+
+    /**
+     * Works out every transfer's status from the responses that follow it. A
+     * <transfer_accept>/<transfer_decline> settles a pending transfer from the
+     * other side — the latest one with the same amount, else the latest one — and
+     * takes that transfer's amount when it names none.
+     * @returns {Map<string, object>} keyed "messageIndex:partIndex" — transfers get
+     *   { status, amount }, responses get { amount }
+     */
+    function resolveTransfers(history, allParts) {
+        const info = new Map();
+        const pending = { user: [], char: [] };
+        history.forEach((msg, i) => {
+            const side = msg.is_user ? 'user' : 'char';
+            const other = msg.is_user ? 'char' : 'user';
+            allParts[i].forEach((part, j) => {
+                if (part.type === 'transfer') {
+                    const entry = { status: 'pending', amount: part.amount };
+                    info.set(`${i}:${j}`, entry);
+                    pending[side].push(entry);
+                } else if (part.type === 'transfer_accept' || part.type === 'transfer_decline') {
+                    const queue = pending[other];
+                    let k = queue.map(t => t.amount).lastIndexOf(part.amount);
+                    if (k === -1) k = queue.length - 1;
+                    const target = k >= 0 ? queue.splice(k, 1)[0] : null;
+                    if (target) target.status = part.type === 'transfer_accept' ? 'accepted' : 'declined';
+                    info.set(`${i}:${j}`, { amount: part.amount || target?.amount || '' });
+                }
+            });
+        });
+        return info;
     }
 
     // Character messages whose bubbles already played their arrival sequence,
@@ -6099,11 +6302,16 @@
         // Index of the last character message — swipe nav is only rendered there
         const lastCharMsgIndex = history.reduce((last, msg, i) => (!msg.is_user ? i : last), -1);
 
+        // A transfer's status depends on later messages, so parse everything first
+        const allParts = history.map(getMessageDisplayParts);
+        const transfers = resolveTransfers(history, allParts);
+
         history.forEach((msg, index) => {
             const isUser = msg.is_user;
-            const parts = getMessageDisplayParts(msg);
+            const parts = allParts[index];
+            const contents = parts.map((part, j) => buildPartContentHtml(part, transfers.get(`${index}:${j}`), isUser));
             const mainPart = parts[parts.length - 1];
-            const mainPhotoClass = mainPart.type === 'photo' ? ' et-bubble-photo' : '';
+            const mainCardClass = partBubbleClass(mainPart);
             const msgDate = new Date(msg.send_date || Date.now());
             const time = msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
             const fullDateToolip = msgDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -6113,9 +6321,9 @@
                 const safeUserName = DOMPurify.sanitize(userName, { ALLOWED_TAGS: [] });
                 bubbleHtml = `
                 <div class="et-message et-message-user" data-index="${index}">
-                    ${buildLeadingPartBubblesHtml(parts, 'et-bubble-user')}
-                    <div class="et-bubble et-bubble-user et-bubble-main${mainPhotoClass}">
-                        ${buildPartContentHtml(mainPart)}
+                    ${buildLeadingPartBubblesHtml(parts, contents, 'et-bubble-user', index, true)}
+                    <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}">
+                        ${contents[contents.length - 1]}
                         <div class="et-message-footer">
                             <span class="et-message-time" title="${fullDateToolip}">${time}</span>
                             <span class="et-user-name">${safeUserName}</span>
@@ -6177,9 +6385,9 @@
                 bubbleHtml = `
                 <div class="et-message et-message-char" data-index="${index}">
                     <div class="et-message-body">
-                        ${buildLeadingPartBubblesHtml(parts, 'et-bubble-char')}
-                        <div class="et-bubble et-bubble-char et-bubble-main${mainPhotoClass}">
-                            ${buildPartContentHtml(mainPart)}
+                        ${buildLeadingPartBubblesHtml(parts, contents, 'et-bubble-char', index, false)}
+                        <div class="et-bubble et-bubble-char et-bubble-main${mainCardClass}">
+                            ${contents[contents.length - 1]}
                             ${buildImageAttachmentHtml(msg, index)}
                             ${swipeNavHtml}
                             <div class="et-message-footer">
@@ -6256,14 +6464,16 @@
             addReaction(msgIndex, reactionId);
         });
 
-        // Bind 3-dot menus
-        inner.find('.et-dots-btn').on('click', function (e) {
+        // Bind 3-dot menus — the footer one acts on the whole message, the per-bubble
+        // ones on a single bubble of a multi-bubble message
+        inner.find('.et-dots-btn, .et-part-dots-btn').on('click', function (e) {
             e.stopPropagation();
             closeAllReactOverlays();
             const btn = jQuery(this);
             const msgIndex = parseInt(btn.data('index'));
             const isUser = btn.data('is-user') === 1 || btn.data('is-user') === '1';
-            toggleDotsMenu(btn, msgIndex, isUser, tethered);
+            const partIndex = btn.hasClass('et-part-dots-btn') ? parseInt(btn.data('part')) : null;
+            toggleDotsMenu(btn, msgIndex, isUser, tethered, partIndex);
         });
 
         // Bind swipe navigation buttons
@@ -6303,6 +6513,11 @@
                 saveChatHistory(h);
                 updateSwipeInPlace(msgIndex, h);
             }
+        });
+
+        inner.find('.et-transfer-actionable').on('click', function (e) {
+            e.stopPropagation();
+            openTransferResponseMenu(jQuery(this));
         });
 
         inner.find('.et-image-attachment-ready').on('click', function (e) {
@@ -6363,6 +6578,7 @@
     // ============================================================
 
     function closeAllDotMenus() {
+        jQuery('#et-attach-btn').removeClass('et-attach-open');
         jQuery('.et-dots-menu').each(function () {
             const menu = jQuery(this);
             menu.addClass('et-dots-menu-closing');
@@ -6373,27 +6589,44 @@
         deleteConfirmIndex = -1;
     }
 
-    function toggleDotsMenu(btn, msgIndex, isUser, tethered) {
-        const existing = jQuery(`.et-dots-menu[data-for="${msgIndex}"][data-is-user="${isUser ? 1 : 0}"]`);
+    /**
+     * @param {number|null} partIndex - set when opened from a single bubble of a
+     *   multi-bubble message; the footer menu (null) acts on the whole message,
+     *   except that its Delete removes only the last bubble
+     */
+    function toggleDotsMenu(btn, msgIndex, isUser, tethered, partIndex = null) {
+        const partKey = partIndex === null ? 'main' : partIndex;
+        const existing = jQuery(`.et-dots-menu[data-for="${msgIndex}"][data-is-user="${isUser ? 1 : 0}"][data-part="${partKey}"]`);
         if (existing.length) { closeAllDotMenus(); return; }
         closeAllDotMenus();
 
+        const msg = getChatHistory()[msgIndex];
+        const partCount = msg ? getMessageDisplayParts(msg).length : 1;
+        const deleteAllLabel = `Delete all (${partCount})`;
+
         // Build menu items
         const items = [];
-        if (isUser) {
+        if (partIndex !== null) {
+            items.push({ id: 'copy_part', icon: 'fa-copy', label: 'Copy', cls: '' });
+            items.push({ id: 'delete', icon: 'fa-trash', label: 'Delete', cls: 'et-dots-item-delete' });
+        } else if (isUser) {
             items.push({ id: 'edit', icon: 'fa-pen', label: 'Edit', cls: '' });
             items.push({ id: 'copy', icon: 'fa-copy', label: 'Copy', cls: '' });
             items.push({ id: 'regen', icon: 'fa-rotate-right', label: 'Regenerate', cls: '' });
             if (memorySystem && settings.memoryEnabled) {
                 items.push({ id: 'add_memory', icon: 'fa-brain', label: 'Add Memory', cls: '' });
             }
-            items.push({ id: 'delete', icon: 'fa-trash', label: 'Delete', cls: 'et-dots-item-delete' });
+            items.push({ id: 'delete', icon: 'fa-trash', label: partCount > 1 ? 'Delete this' : 'Delete', cls: 'et-dots-item-delete' });
+            if (partCount > 1) items.push({ id: 'delete_all', icon: 'fa-trash-can', label: deleteAllLabel, cls: 'et-dots-item-delete' });
         } else {
             items.push({ id: 'edit', icon: 'fa-pen', label: 'Edit', cls: '' });
             items.push({ id: 'regen', icon: 'fa-rotate-right', label: 'Regenerate', cls: '' });
             items.push({ id: 'verbosity', icon: 'fa-align-left', label: 'Verbosity', cls: 'et-dots-item-submenu' });
-            items.push({ id: 'delete', icon: 'fa-trash', label: 'Delete', cls: 'et-dots-item-delete' });
+            items.push({ id: 'delete', icon: 'fa-trash', label: partCount > 1 ? 'Delete this' : 'Delete', cls: 'et-dots-item-delete' });
+            if (partCount > 1) items.push({ id: 'delete_all', icon: 'fa-trash-can', label: deleteAllLabel, cls: 'et-dots-item-delete' });
         }
+        // The footer menu's "Delete this" removes the main (last) bubble
+        const targetPart = partIndex !== null ? partIndex : (partCount > 1 ? partCount - 1 : null);
 
         const itemsHtml = items.map(item => {
             const hasSubmenu = item.id === 'verbosity';
@@ -6403,7 +6636,7 @@
         }).join('');
 
         const menu = jQuery(`
-            <div class="et-dots-menu" data-for="${msgIndex}" data-is-user="${isUser ? 1 : 0}">
+            <div class="et-dots-menu" data-for="${msgIndex}" data-is-user="${isUser ? 1 : 0}" data-part="${partKey}">
                 ${itemsHtml}
             </div>
         `);
@@ -6436,7 +6669,7 @@
         // Close on outside click (once)
         setTimeout(() => {
             jQuery(document).one('click.et-dots-outside', function (e) {
-                if (!jQuery(e.target).closest('.et-dots-menu, .et-dots-btn').length) {
+                if (!jQuery(e.target).closest('.et-dots-menu, .et-dots-btn, .et-part-dots-btn').length) {
                     closeAllDotMenus();
                 }
             });
@@ -6446,11 +6679,33 @@
         menu.find('.et-dots-item').on('click', function (e) {
             e.stopPropagation();
             const action = jQuery(this).data('action');
-            handleDotsAction(action, msgIndex, isUser, jQuery(this));
+            handleDotsAction(action, msgIndex, isUser, jQuery(this), targetPart);
         });
     }
 
-    function handleDotsAction(action, msgIndex, isUser, btn) {
+    /**
+     * Removes one bubble from a message by rebuilding its text from the remaining
+     * parts (the current swipe too, so switching swipes doesn't bring it back).
+     * Removing the last bubble removes the message.
+     */
+    function deleteMessagePart(history, msgIndex, partIndex) {
+        const msg = history[msgIndex];
+        const remaining = getMessageDisplayParts(msg).filter((part, j) => j !== partIndex
+            && (part.type !== 'text' || part.text));
+        if (!remaining.length && !msg.imageAttachment) {
+            history.splice(msgIndex, 1);
+            return;
+        }
+        msg.mes = RichMessages.serializeParts(remaining);
+        const swipe = Array.isArray(msg.swipes) ? msg.swipes[msg.swipeIndex ?? 0] : null;
+        if (swipe) swipe.mes = msg.mes;
+    }
+
+    /**
+     * @param {number|null} partIndex - the bubble a part-level action targets (Copy /
+     *   Delete on one bubble of a multi-bubble message); null for the whole message
+     */
+    function handleDotsAction(action, msgIndex, isUser, btn, partIndex = null) {
         const history = getChatHistory();
         const msg = history[msgIndex];
         if (!msg) return;
@@ -6461,29 +6716,41 @@
             return;
         }
 
-        if (action === 'delete') {
-            if (deleteConfirmIndex === msgIndex) {
+        if (action === 'copy_part') {
+            const part = getMessageDisplayParts(msg)[partIndex];
+            const text = !part ? '' : part.type === 'text' ? part.text : RichMessages.toPlainText(RichMessages.serializeParts([part]));
+            try { navigator.clipboard.writeText(text); } catch (e) { /* noop */ }
+            closeAllDotMenus();
+            return;
+        }
+
+        if (action === 'delete' || action === 'delete_all') {
+            // Only this message (or one of its bubbles) goes — later messages stay
+            const wholeMessage = action === 'delete_all' || partIndex === null;
+            const confirmKey = `${msgIndex}:${wholeMessage ? 'all' : partIndex}`;
+            if (deleteConfirmIndex === confirmKey) {
                 // Second click — execute delete
                 clearTimeout(deleteConfirmTimer);
                 deleteConfirmTimer = null;
                 deleteConfirmIndex = -1;
 
-                // Delete this message and all messages below it (truncate)
-                history.splice(msgIndex, history.length - msgIndex);
+                if (wholeMessage) history.splice(msgIndex, 1);
+                else deleteMessagePart(history, msgIndex, partIndex);
 
                 saveChatHistory(history);
                 closeAllDotMenus();
-                renderMessages(history);
+                renderMessages(history, true);
             } else {
                 // First click — highlight red and change text
-                deleteConfirmIndex = msgIndex;
+                const originalLabel = btn.find('span').text();
+                deleteConfirmIndex = confirmKey;
                 btn.addClass('et-dots-item-delete-confirm');
                 btn.find('span').text('Are You Sure?');
 
                 deleteConfirmTimer = setTimeout(() => {
                     deleteConfirmIndex = -1;
                     btn.removeClass('et-dots-item-delete-confirm');
-                    btn.find('span').text('Delete');
+                    btn.find('span').text(originalLabel);
                 }, 3000);
             }
             return;
@@ -6500,10 +6767,10 @@
 
             // Multi-bubble / photo messages are edited as one raw text (tags included)
             // in the main bubble; save or cancel re-renders the bubbles.
-            const isRich = msgEl.find('.et-bubble-part, .et-bubble-photo').length > 0;
+            const isRich = msgEl.find('.et-bubble-part, .et-bubble-card').length > 0;
             if (isRich) {
                 msgEl.find('.et-bubble-part').hide();
-                bubble.removeClass('et-bubble-photo').find('.et-photo-card').hide();
+                bubble.removeClass('et-bubble-card').find('.et-photo-card, .et-transfer-card').hide();
                 if (!textEl.length) textEl = jQuery('<div class="et-bubble-text"></div>').prependTo(bubble);
             }
 

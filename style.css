@@ -12074,10 +12074,11 @@ textarea.et-mem-save-snippet-edit::placeholder {
 
 
 /* ────────────────────────────────────────────────────────────────
-   RICH MESSAGES — multi-bubble replies + photo cards
+   RICH MESSAGES — multi-bubble replies, photo and transfer cards
    A message renders as one bubble per line (character side) plus a
-   main bubble that carries the footer. Inline <photo> tags render as
-   photo cards inside their own bubble.
+   main bubble that carries the footer. Inline <photo> / <transfer>
+   tags render as cards inside their own bubble. Colours come from the
+   theme variables so cards follow custom themes.
    ──────────────────────────────────────────────────────────────── */
 
 /* Leading bubbles carry no footer, so even out their bottom padding */
@@ -12095,13 +12096,13 @@ textarea.et-mem-save-snippet-edit::placeholder {
     animation: et-msg-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Photo bubbles hug their card */
-.et-bubble.et-bubble-photo,
-.et-message-user .et-bubble.et-bubble-photo {
+/* Card bubbles (photo, transfer) hug their card */
+.et-bubble.et-bubble-card,
+.et-message-user .et-bubble.et-bubble-card {
     padding: 6px;
 }
 
-.et-bubble-photo .et-message-footer {
+.et-bubble-card .et-message-footer {
     padding-left: 8px;
     padding-right: 8px;
 }
@@ -12146,8 +12147,8 @@ textarea.et-mem-save-snippet-edit::placeholder {
     white-space: pre-wrap;
 }
 
-/* Photo button inside the input pill */
-.et-photo-btn {
+/* Attach ("+") button inside the input pill — shows the compose mode's icon while active */
+.et-attach-btn {
     -webkit-appearance: none;
     appearance: none;
     background: none !important;
@@ -12168,20 +12169,170 @@ textarea.et-mem-save-snippet-edit::placeholder {
     transition: color 0.2s, transform 0.15s;
 }
 
-.et-photo-btn:hover:not(:disabled) {
+.et-attach-btn i {
+    transition: transform 0.18s ease;
+}
+
+.et-attach-btn:hover:not(:disabled) {
     color: var(--et-theme-color);
 }
 
-.et-photo-btn.et-photo-btn-active {
+.et-attach-btn.et-attach-open i {
+    transform: rotate(45deg);
+}
+
+.et-attach-btn.et-attach-btn-active {
     color: var(--et-theme-color);
     transform: scale(1.12);
 }
 
-.et-photo-btn:disabled {
+.et-attach-btn:disabled {
     opacity: 0.4;
     cursor: default;
 }
 
-.et-input-wrap.et-input-wrap-photo {
+.et-input-wrap.et-input-wrap-compose {
     border-color: var(--et-theme-color) !important;
+}
+
+.et-attach-menu {
+    width: 150px;
+}
+
+/* ── Transfer cards ─────────────────────────────────────────────── */
+
+.et-transfer-card {
+    width: min(220px, 60vw);
+    border-radius: 14px;
+    overflow: hidden;
+    color: #fff;
+    background: linear-gradient(135deg,
+        color-mix(in srgb, var(--et-theme-color) 88%, #fff) 0%,
+        var(--et-theme-color) 50%,
+        color-mix(in srgb, var(--et-theme-color) 70%, #000) 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    user-select: none;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease, filter 0.2s ease;
+}
+
+.et-transfer-body {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 14px 12px;
+}
+
+.et-transfer-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.et-transfer-info {
+    min-width: 0;
+}
+
+.et-transfer-amount {
+    font-size: 1.12rem;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+}
+
+.et-transfer-status {
+    font-size: 0.76rem;
+    opacity: 0.9;
+    margin-top: 2px;
+}
+
+.et-transfer-footer {
+    padding: 5px 14px 6px;
+    font-size: 0.68rem;
+    opacity: 0.8;
+    border-top: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+/* Settled transfers and responses fade, like a paid bill */
+.et-transfer-accepted,
+.et-transfer-declined {
+    opacity: 0.72;
+    filter: saturate(0.55);
+}
+
+.et-transfer-actionable {
+    cursor: pointer;
+}
+
+.et-transfer-actionable:hover {
+    transform: translateY(-1px);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.2),
+        0 4px 14px color-mix(in srgb, var(--et-theme-color) 45%, transparent);
+}
+
+/* A transfer stands on its own, as in messaging apps: its bubble drops the glass
+   surface and the footer (name, time, actions) sits right under the card */
+.et-message .et-bubble.et-bubble-transfer,
+.et-message .et-bubble.et-bubble-transfer:hover {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: 0;
+}
+
+.et-message .et-bubble-transfer .et-message-footer {
+    border-top: none;
+    margin-top: 4px;
+    padding: 2px 4px 0;
+}
+
+/* Per-bubble menu on the leading bubbles of a multi-bubble message (Copy /
+   Delete one bubble). Sits just outside the bubble, revealed on hover. */
+.et-part-dots-btn {
+    position: absolute;
+    top: 50%;
+    right: -26px;
+    transform: translateY(-50%);
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--et-text-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+
+.et-message-user .et-part-dots-btn {
+    right: auto;
+    left: -26px;
+}
+
+.et-bubble-part:hover .et-part-dots-btn,
+.et-part-dots-btn:focus-visible {
+    opacity: 0.8;
+}
+
+.et-part-dots-btn:hover {
+    opacity: 1;
+    color: var(--et-theme-color);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+@media (hover: none) {
+    .et-part-dots-btn {
+        opacity: 0.45;
+    }
 }
