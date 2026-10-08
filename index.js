@@ -2174,6 +2174,20 @@
             prompt += `\n\n<character_reference>\n${charRefParts.join('\n\n')}\n</character_reference>`;
         }
 
+        // ── 2b. STORY OPENING ────────────────────────────────────────────────────
+        // The greeting establishes the setting, the relationship with the user and —
+        // through the character's spoken lines — their voice. It sits with the stable
+        // character knowledge rather than after the behaviour lock, so its narrative
+        // prose is not at recency pulling replies into roleplay-style narration.
+        const openingText = getEchoTextFirstMessage(char);
+        if (openingText) {
+            const userName = getUserName();
+            const openingUse = tethered
+                ? `This is the opening scene of the roleplay between ${name} and ${userName}. Treat its setting and relationships as established facts.`
+                : `This scene is not part of this conversation; use it only to learn ${name}'s voice.`;
+            prompt += `\n\n${openingUse} ${name}'s spoken lines in it are the reference for how ${name} talks — vocabulary, tone, attitude toward ${userName}, and speech quirks. Carry that voice into text messages, but do not imitate the scene's narration, action descriptions, or length.\n<story_opening>\n${openingText}\n</story_opening>`;
+        }
+
         // Author's Note — special per-character instructions from SillyTavern.
         // Reads from multiple sources in priority order:
         // Author's Note — reads from extensionSettings.note.chara, which is where
@@ -2200,6 +2214,17 @@
         prompt += buildInsideJokesContext();
         if (tethered) {
             prompt += buildEmotionContext();
+        }
+
+        // ── 3b. STORY CONTINUITY (Tethered only) ────────────────────────────────
+        // Recent ST roleplay, so replies stay consistent with what has actually
+        // happened. Without it the closing instruction asks the model to follow a
+        // "current story context" it never sees, and it invents one instead.
+        if (tethered) {
+            const storyText = getSTStoryContext(char);
+            if (storyText) {
+                prompt += `\n\nRecent events in the roleplay, oldest first. ${name} remembers all of this; the text messages take place within this story and must stay consistent with it.\n<story_so_far>\n${storyText}\n</story_so_far>`;
+            }
         }
 
         // ── 4. BEHAVIOUR LOCK ────────────────────────────────────────────────────
@@ -2321,37 +2346,106 @@
         }
     }
 
-    function getSTChatMessages() {
+    // How much of the live ST roleplay EchoText sees in Tethered mode. Both caps apply
+    // and the newest messages win; with long RP replies the character cap usually binds.
+    const ST_STORY_MAX_MESSAGES = 20;
+    const ST_STORY_MAX_CHARS = 6000;
+
+    /** Whether the open ST chat is one the given character takes part in. */
+    function isCharInCurrentSTChat(char) {
+        const context = SillyTavern.getContext();
+        if (context.groupId) {
+            const group = (context.groups || []).find(g => String(g.id) === String(context.groupId));
+            return !!(group && Array.isArray(group.members) && group.members.includes(char.avatar));
+        }
+        const stChar = context.characters?.[context.characterId];
+        if (!stChar) return false;
+        return (stChar.avatar && char.avatar) ? stChar.avatar === char.avatar : stChar.name === char.name;
+    }
+
+    /**
+     * Index of the character's greeting in the live ST chat, or -1. The opening is the
+     * leading run of character messages before the user's first message (one greeting
+     * per member in group chats); hidden (is_system) messages are skipped.
+     */
+    function findSTOpeningIndex(char) {
+        const chat = SillyTavern.getContext().chat;
+        if (!Array.isArray(chat) || !isCharInCurrentSTChat(char)) return -1;
+        for (let i = 0; i < chat.length; i++) {
+            const msg = chat[i];
+            if (!msg || msg.is_system) continue;
+            if (msg.is_user) break;
+            const own = msg.original_avatar ? msg.original_avatar === char.avatar : msg.name === char.name;
+            if (own && (msg.mes || '').trim()) return i;
+        }
+        return -1;
+    }
+
+    /** Strips reasoning blocks, styles, scripts and HTML comments from ST message text. */
+    function cleanSTMessageText(text) {
+        return stripThinkingTags(String(text || ''))
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .trim();
+    }
+
+    /**
+     * Returns the story opening for a character.
+     * Prefers the greeting actually present in the live ST chat (reflects the chosen
+     * alternate greeting / swipe), falling back to the card's first_mes.
+     * @param {object|null} char - character object; defaults to the current character
+     * @returns {string} the opening text with macros resolved, or ''
+     */
+    function getEchoTextFirstMessage(char = null) {
+        const target = char || getCurrentCharacter();
+        if (!target) return '';
+
+        let text = target.first_mes || target.data?.first_mes || '';
         try {
-            const context = SillyTavern.getContext();
-            const chat = context.chat;
-            if (!chat || !chat.length) return null;
+            const idx = findSTOpeningIndex(target);
+            if (idx !== -1) text = SillyTavern.getContext().chat[idx].mes;
+        } catch (e) { /* keep the card's first_mes */ }
 
-            const charName = getCharacterName();
+        return expandTimeDateMacros(cleanSTMessageText(text)
+            .replace(/{{char}}/gi, target.name || 'Character')
+            .replace(/{{user}}/gi, getUserName())).trim();
+    }
+
+    /**
+     * Recent messages of the live ST roleplay as "Speaker: text" lines, oldest first.
+     * Skips hidden messages and the character's greeting (injected separately as the
+     * story opening). Returns '' when the open ST chat doesn't involve the character.
+     */
+    function getSTStoryContext(char) {
+        try {
+            const chat = SillyTavern.getContext().chat;
+            if (!Array.isArray(chat) || !chat.length || !isCharInCurrentSTChat(char)) return '';
+
+            const openingIdx = findSTOpeningIndex(char);
             const userName = getUserName();
+            const lines = [];
+            let budget = ST_STORY_MAX_CHARS;
 
-            // Get the character's first_mes to exclude it from context injection
-            const char = getCurrentCharacter();
-            const firstMes = (char && char.first_mes) ? char.first_mes.trim() : null;
-
-            const selected = [];
-
-            for (let i = chat.length - 1; i >= 0; i--) {
+            for (let i = chat.length - 1; i >= 0 && lines.length < ST_STORY_MAX_MESSAGES; i--) {
                 const msg = chat[i];
-                if (!msg.is_user && firstMes && (msg.mes || '').trim() === firstMes) continue;
-                selected.unshift(msg);
+                if (!msg || msg.is_system || i === openingIdx) continue;
+                const text = cleanSTMessageText(msg.mes);
+                if (!text) continue;
+                const speaker = msg.is_user ? userName : (msg.name || char.name);
+                const line = `${speaker}: ${text}`;
+                if (line.length > budget) {
+                    // Always keep the newest message, trimmed to its most recent part
+                    if (!lines.length) lines.unshift(`${speaker}: …${text.slice(-budget)}`);
+                    break;
+                }
+                lines.unshift(line);
+                budget -= line.length;
             }
 
-            if (!selected.length) return null;
-
-            const lines = selected.map(msg => {
-                const speaker = msg.is_user ? userName : (msg.name || charName);
-                return `${speaker}: ${msg.mes || ''}`;
-            });
-
-            return lines.join('\n');
+            return lines.join('\n\n');
         } catch (e) {
-            return null;
+            return '';
         }
     }
 
