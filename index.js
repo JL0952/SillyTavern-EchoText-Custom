@@ -65,6 +65,9 @@
     loadEchoTextModule('lib/st-context-emotion.js', 'EchoTextSTContextEmotion');
     loadEchoTextModule('lib/theme-editor.js', 'EchoTextThemeEditor');
     loadEchoTextModule('lib/context-override.js', 'EchoTextContextOverride');
+    loadEchoTextModule('lib/rich-messages.js', 'EchoTextRichMessages');
+
+    const RichMessages = window.EchoTextRichMessages;
 
     // ============================================================
     // THEME PRESETS
@@ -92,6 +95,17 @@
     let fabDragging = false;
     let loadedFontFamily = null;
     let showTypingIndicator = false;
+    // When on, the next message the user sends is a photo: the typed text is its description
+    let photoComposeMode = false;
+    // Reply scheduling: the user can send several texts in a row and the character
+    // answers once they pause (see scheduleCharacterReply)
+    let replyTimer = null;
+    let replyQueued = false;
+    let replyInProgress = false;
+    // Completion requests in flight — once the model is writing, a new user text
+    // waits for a follow-up reply instead of cancelling it
+    let activeCompletionRequests = 0;
+    const PHOTO_PLACEHOLDER = 'Describe the photo you\'re sending...';
     let hasUnreadCharacterMessage = false;
     let emotionSystem = null;
     let proactiveMessaging = null;
@@ -336,6 +350,13 @@
                 const val = defaultSettings[key];
                 s[key] = (val !== null && typeof val === 'object') ? JSON.parse(JSON.stringify(val)) : val;
             }
+        }
+        // The loop above freezes each prompt at the default of the version that first
+        // saved it. A prompt still equal to an earlier factory default was never
+        // customised, so upgrade it to the current default.
+        const legacyPrompts = window.EchoTextConfig.LEGACY_PROMPT_DEFAULTS || {};
+        for (const [key, oldDefaults] of Object.entries(legacyPrompts)) {
+            if (oldDefaults.includes(s[key])) s[key] = defaultSettings[key];
         }
         if (!s.chatHistory || typeof s.chatHistory !== 'object' || Array.isArray(s.chatHistory)) {
             s.chatHistory = {};
@@ -1562,7 +1583,8 @@
             jQuery('#et-panel').removeClass('et-panel-no-char');
             jQuery('#et-char-name').html(`Group: ${escapeHtml(charNames)}<i class="fa-solid fa-chevron-down et-char-name-caret" aria-hidden="true"></i>`);
             jQuery('#et-input').attr('placeholder', `Message all: ${charNames}...`).prop('disabled', false);
-            jQuery('#et-send-btn').prop('disabled', false);
+            jQuery('#et-send-btn, #et-photo-btn').prop('disabled', false);
+            setPhotoComposeMode(false);
             jQuery('#et-emotion-indicator').addClass('et-emotion-indicator-hidden');
             updatePanelStatusRow();
             updateImageGenerationVisibility();
@@ -1586,7 +1608,8 @@
         jQuery('#et-char-name').html(`${escapeHtml(hasChar ? charName : 'Choose A Character')}<i class="fa-solid fa-chevron-down et-char-name-caret" aria-hidden="true"></i>`);
         jQuery('#et-char-avatar-wrap').replaceWith(buildAvatarHtml(charName, '', 'et-char-avatar-wrap'));
         jQuery('#et-input').attr('placeholder', hasChar ? `Text ${charName}...` : 'Text a character...').prop('disabled', !hasChar);
-        jQuery('#et-send-btn').prop('disabled', !hasChar);
+        jQuery('#et-send-btn, #et-photo-btn').prop('disabled', !hasChar);
+        setPhotoComposeMode(false);
         jQuery('#et-emotion-indicator').toggleClass('et-emotion-indicator-hidden', !emotionEnabled);
 
         if (emotionEnabled) {
@@ -1879,7 +1902,7 @@
             const sender = msg.is_user
                 ? getUserName()
                 : (msg.charName || memberMap.get(msg.charKey) || getCharacterName());
-            return `${sender}: ${stripThinkingTags(msg.mes || '')}`;
+            return `${sender}: ${getContextMessageText(msg.mes)}`;
         }).filter(Boolean);
 
         return lines.length
@@ -1960,10 +1983,10 @@
         // another character's line as its own prior output.
         const historyMessages = priorHistory.map(msg => {
             if (msg.is_user) {
-                return { role: 'user', content: stripThinkingTags(msg.mes || '') };
+                return { role: 'user', content: getContextMessageText(msg.mes) };
             }
             const speaker = msg.charName || charName;
-            return { role: 'assistant', content: `${speaker}: ${stripThinkingTags(msg.mes || '')}` };
+            return { role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` };
         });
 
         // ── 4. Final user turn: input + persona + character card + cue ────────
@@ -2103,8 +2126,8 @@
         //                  (semi-static contextual colour)
         //  4. LOCK       — fiction frame + persona-lock reminder (recency anchor for
         //                  behaviour — last thing read before the model replies)
-        //  5. VERBOSITY  — length instruction
-        //  6. FORMAT     — texting-medium anchor (must be last)
+        //  5. VERBOSITY  — how many texts to send
+        //  6. FORMAT     — texting-medium anchor + message format (must be last)
         // ───────────────────────────────────────────────────────────────────────
 
         // ── 1. IDENTITY ─────────────────────────────────────────────────────────
@@ -2268,7 +2291,22 @@
         const textingFormat = getPrompt('promptTextingFormat');
         if (textingFormat) prompt += '\n\n' + textingFormat;
 
+        // ── 8. MESSAGE FORMAT ────────────────────────────────────────────────────
+        prompt += '\n\n' + buildMessageFormatPrompt(name, userName);
+
         return prompt;
+    }
+
+    /**
+     * The reply-format rules the renderer depends on: each line is its own bubble
+     * and <photo> tags become photo cards. Built in code rather than kept as an
+     * editable prompt because it must match lib/rich-messages.js exactly.
+     */
+    function buildMessageFormatPrompt(charName, userName) {
+        return [
+            `MESSAGES: Put each text on its own line — every line reaches ${userName} as a separate message bubble.`,
+            `PHOTOS: ${charName} can send photos. Write a photo on its own line as <photo>what the photo shows</photo> — a short, concrete description of the picture, written in the same language as the conversation — and ${userName} sees it as an actual picture. Send one whenever ${charName} naturally would, such as when asked for a picture, but never use it to describe ${charName}'s own actions. A <photo> from ${userName} is a picture they sent: react to what it shows.`
+        ].join('\n');
     }
 
     async function getActiveWorldInfoEntries(opts) {
@@ -2777,7 +2815,16 @@
     // GENERATION ENGINE
     // ============================================================
 
-    async function requestEchoTextCompletion({ apiMessages, rawPrompt, systemPrompt, prefillPrefix, signal }) {
+    async function requestEchoTextCompletion(params) {
+        activeCompletionRequests++;
+        try {
+            return await sendCompletionRequest(params);
+        } finally {
+            activeCompletionRequests--;
+        }
+    }
+
+    async function sendCompletionRequest({ apiMessages, rawPrompt, systemPrompt, prefillPrefix, signal }) {
         // Strip the pre-fill prefix only when the model echoed it as a chat-completion
         // artefact. Uses exact startsWith (case-insensitive) instead of regex to avoid
         // accidentally matching legitimate content that happens to begin with similar text.
@@ -2853,6 +2900,15 @@
     }
 
     /**
+     * A message's text as sent to the model: reasoning blocks stripped and
+     * rich-content tags rewritten to their canonical form, so the model always
+     * sees well-formed examples of its own past usage.
+     */
+    function getContextMessageText(mes) {
+        return RichMessages.normalizeMessageTags(stripThinkingTags(mes || ''));
+    }
+
+    /**
      * Resolves the text to use for a history message when building API context.
      *
      * For assistant turns where image generation ran but no text reply was included
@@ -2868,7 +2924,7 @@
      * @returns {string} the text to inject into the API context for this turn
      */
     function resolveHistoryMessageText(msg) {
-        const rawText = stripThinkingTags(msg.mes || '');
+        const rawText = getContextMessageText(msg.mes);
         if (!msg.is_user && !rawText.trim() && msg.imageAttachment?.status === 'ready') {
             // A silent image turn — give the model a compact, in-character stub so it
             // knows the action was completed.  The exact phrasing is deliberately terse
@@ -2975,7 +3031,8 @@
         updateSendButton(true);
 
         let workingHistory = Array.isArray(history) ? [...history] : [];
-        const latestUserIdx = findLastUserMessageIndex(workingHistory);
+        const unreadIdx = getUnreadUserMessageIndices(workingHistory);
+        const markUnread = (state, note) => unreadIdx.forEach(i => setUserMessageReceiptState(workingHistory, i, state, note));
         const timing = getEmotionReplyTimingModel();
         const latestUserMessage = Array.isArray(history) && history.length ? history[history.length - 1] : null;
 
@@ -2997,20 +3054,20 @@
         let result = '';
 
         try {
-            if (latestUserIdx >= 0) {
+            if (unreadIdx.length) {
                 await sleepWithAbort(timing.deliveredDelayMs, abortController.signal);
-                setUserMessageReceiptState(workingHistory, latestUserIdx, 'delivered', 'Delivered to character');
+                markUnread('delivered', 'Delivered to character');
                 saveChatHistory(workingHistory);
 
                 await sleepWithAbort(timing.readDelayMs, abortController.signal);
-                setUserMessageReceiptState(workingHistory, latestUserIdx, 'read', 'Read by character');
+                markUnread('read', 'Read by character');
                 saveChatHistory(workingHistory);
 
                 if (timing.ghostDelayMs > 0) {
-                    setUserMessageReceiptState(workingHistory, latestUserIdx, 'ghosted', 'Read — paused before replying');
+                    markUnread('ghosted', 'Read — paused before replying');
                     saveChatHistory(workingHistory);
                     await sleepWithAbort(timing.ghostDelayMs, abortController.signal);
-                    setUserMessageReceiptState(workingHistory, latestUserIdx, 'read', 'Read by character');
+                    markUnread('read', 'Read by character');
                     saveChatHistory(workingHistory);
                 }
             }
@@ -3093,7 +3150,7 @@
                     }
                 }
 
-                const newHistory = [...workingHistory, charReply];
+                const newHistory = [...withMessagesSentSince(workingHistory), charReply];
                 pruneSwipesOnPrevLastChar(newHistory);
                 saveChatHistory(newHistory);
                 if (isTetheredMode()) {
@@ -3125,6 +3182,7 @@
             isGenerating = false;
             abortController = null;
             updateSendButton(false);
+            onGenerationSettled();
         }
     }
 
@@ -3205,7 +3263,11 @@
 
         const inner = jQuery('#et-messages-inner');
         const msgEl = inner.find(`.et-message[data-index="${msgIndex}"]`);
-        if (!msgEl.length) {
+        // Multi-bubble or photo messages (before or after the swipe) are rebuilt
+        // rather than patched in place
+        const newParts = getMessageDisplayParts(msg);
+        if (!msgEl.length || newParts.length > 1 || newParts[0].type !== 'text'
+                || msgEl.find('.et-bubble-part, .et-bubble-photo').length) {
             renderMessages(h, true);
             return;
         }
@@ -3222,7 +3284,7 @@
         // ── DOM changes ───────────────────────────────────────────────────
 
         // Update bubble text
-        msgEl.find('.et-bubble-text').html(formatMessageText(msg.mes));
+        msgEl.find('.et-bubble-text').html(formatMessageText(newParts[0].text));
 
         // Update image attachment in-place
         const existingImg = msgEl.find('.et-image-attachment');
@@ -3301,6 +3363,7 @@
             isGenerating = false;
             abortController = null;
             updateSendButton(false);
+            onGenerationSettled();
             setTypingIndicatorVisible(false);
             return;
         }
@@ -3425,6 +3488,7 @@
             isGenerating = false;
             abortController = null;
             updateSendButton(false);
+            onGenerationSettled();
         }
     }
 
@@ -3441,7 +3505,7 @@
         if (msgIndex < 0) return;
         const msgEl = inner.find(`.et-message[data-index="${msgIndex}"]`);
         if (!msgEl.length) return;
-        const bubble = msgEl.find('.et-bubble-char')[0];
+        const bubble = msgEl.find('.et-bubble-main')[0];
         if (!bubble) return;
 
         const AXIS_LOCK_PX = 8;   // min movement before axis is committed
@@ -3644,10 +3708,10 @@
         // replies, even those that came after the last user message.
         const historyMessages = allHistory.map(msg => {
             if (msg.is_user) {
-                return { role: 'user', content: stripThinkingTags(msg.mes || '') };
+                return { role: 'user', content: getContextMessageText(msg.mes) };
             }
             const speaker = msg.charName || charName;
-            return { role: 'assistant', content: `${speaker}: ${stripThinkingTags(msg.mes || '')}` };
+            return { role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` };
         });
 
         // ── 3. Final user turn: persona + character card + stance + verbosity ──
@@ -3818,6 +3882,7 @@
             isGenerating = false;
             abortController = null;
             updateSendButton(false);
+            onGenerationSettled();
         }
     }
 
@@ -3845,17 +3910,18 @@
         let workingHistory = Array.isArray(history) ? [...history] : [];
 
         // Mark the latest user message as delivered / read
-        const latestUserIdx = findLastUserMessageIndex(workingHistory);
+        const unreadIdx = getUnreadUserMessageIndices(workingHistory);
+        const markUnread = (state, note) => unreadIdx.forEach(i => setUserMessageReceiptState(workingHistory, i, state, note));
         const timing = { deliveredDelayMs: 350, readDelayMs: 850, ghostDelayMs: 0, typingLeadMs: 250, replyDelayMs: 450 };
 
         try {
-            if (latestUserIdx >= 0) {
+            if (unreadIdx.length) {
                 await sleepWithAbort(timing.deliveredDelayMs, abortController.signal);
-                setUserMessageReceiptState(workingHistory, latestUserIdx, 'delivered', 'Delivered to group');
+                markUnread('delivered', 'Delivered to group');
                 groupManager.saveCombineHistory(groupId, workingHistory, !isTetheredMode());
 
                 await sleepWithAbort(timing.readDelayMs, abortController.signal);
-                setUserMessageReceiptState(workingHistory, latestUserIdx, 'read', 'Read by group');
+                markUnread('read', 'Read by group');
                 groupManager.saveCombineHistory(groupId, workingHistory, !isTetheredMode());
             }
 
@@ -3892,7 +3958,7 @@
                             charKey: charKey,
                             send_date: Date.now()
                         };
-                        workingHistory = [...workingHistory, charReply];
+                        workingHistory = [...withMessagesSentSince(workingHistory), charReply];
                         groupManager.saveCombineHistory(groupId, workingHistory, !isTetheredMode());
                         renderMessages(workingHistory);
                         setFabUnreadIndicator(panelOpen ? false : true);
@@ -3920,6 +3986,7 @@
             isGenerating = false;
             abortController = null;
             updateSendButton(false);
+            onGenerationSettled();
         }
     }
 
@@ -4018,6 +4085,7 @@
             isGenerating = false;
             abortController = null;
             updateSendButton(false);
+            onGenerationSettled();
         }
     }
 
@@ -4629,7 +4697,9 @@
         jQuery('#et-panel').removeClass('et-panel-no-char');
         jQuery('#et-char-name').html(`${escapeHtml(charName)}<i class="fa-solid fa-chevron-down et-char-name-caret" aria-hidden="true"></i>`);
         jQuery('#et-input').attr('placeholder', `Text ${charName}...`).prop('disabled', false);
-        jQuery('#et-send-btn').prop('disabled', false);
+        jQuery('#et-send-btn, #et-photo-btn').prop('disabled', false);
+        setPhotoComposeMode(false);
+        cancelScheduledReply();
 
         // Rebuild avatar in the header using the group module's builder
         const newAvatarHtml = groupManager.buildAvatarHtmlForChar(charObj, '', 'et-char-avatar-wrap');
@@ -4740,6 +4810,7 @@
 
             <div class="et-input-bar">
                 <div class="et-input-wrap">
+                    <button class="et-photo-btn" id="et-photo-btn" type="button" title="Send a photo — describe what it shows"${hasChar ? '' : ' disabled'}><i class="fa-regular fa-image"></i></button>
                     <textarea class="et-input" id="et-input" placeholder="${inCombine ? `Message all: ${charName}...` : (hasChar ? `Text ${charName}...` : 'Text a character...')}" rows="1"${hasChar ? '' : ' disabled'}></textarea>
                 </div>
                 <button class="et-send-btn" id="et-send-btn" title="Send message"${hasChar ? '' : ' disabled'}>
@@ -5056,6 +5127,12 @@
 
         jQuery('#et-send-btn').on('click', handleSend);
 
+        photoComposeMode = false;
+        jQuery('#et-photo-btn').on('click', function () {
+            setPhotoComposeMode(!photoComposeMode);
+            jQuery('#et-input').trigger('focus');
+        });
+
         jQuery('#et-input').on('keydown', function (e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -5064,6 +5141,9 @@
         }).on('input', function () {
             this.style.height = 'auto';
             this.style.height = Math.min(this.scrollHeight + 2, 92) + 'px';
+            // Still typing — the character keeps waiting
+            if (replyTimer) scheduleCharacterReply();
+            if (isGenerating) updateSendButton(true);
         });
 
         // Close emoji overlays when clicking outside
@@ -5139,13 +5219,20 @@
     }
 
     function handleSend() {
-        if (isGenerating) {
-            if (abortController) abortController.abort();
-            return;
-        }
-
         const input = jQuery('#et-input');
         const text = input.val().trim();
+
+        if (isGenerating) {
+            // An empty send — or any send during a regeneration/swipe — cancels, as before
+            if (!replyInProgress || !text) {
+                if (abortController) abortController.abort();
+                return;
+            }
+            // A reply still in its read/typing delays hasn't reached the model yet:
+            // drop it so the rescheduled reply covers this text too. Once the model
+            // is writing, let it finish; the character follows up afterwards.
+            if (activeCompletionRequests === 0 && abortController) abortController.abort();
+        }
 
         const char = getCurrentCharacter();
         if (!char) {
@@ -5153,18 +5240,21 @@
             return;
         }
 
-        // Empty send — generate a continuation/response from the last message
+        // Photo mode needs a description; an empty send doesn't fall through to a nudge
+        const sendingPhoto = photoComposeMode;
+        if (sendingPhoto && !text) return;
+
+        // Empty send — reply right away (skipping any pending pause), or nudge a
+        // continuation from the last message
         if (!text) {
-            const history = getChatHistory();
-            if (groupManager && groupManager.isGroupSession() && groupManager.isCombineMode()) {
-                generateEchoTextCombined(history);
-            } else {
-                generateEchoText(history);
-            }
+            clearTimeout(replyTimer);
+            startCharacterReply();
             return;
         }
 
         input.val('').css('height', 'auto');
+        if (sendingPhoto) setPhotoComposeMode(false);
+        if (isGenerating) updateSendButton(true);
 
         // Process user message for emotion analysis
         processMessageEmotion(text, true);
@@ -5172,7 +5262,7 @@
         const history = getChatHistory();
         const userMsg = {
             is_user: true,
-            mes: text,
+            mes: sendingPhoto ? `<photo>${text.replace(/\s*\n\s*/g, ' ')}</photo>` : text,
             send_date: Date.now(),
             meta: {
                 receipt: {
@@ -5182,7 +5272,7 @@
             }
         };
         // Detect memory-worthy spans in the user's message for manual highlighting
-        if (memorySystem && settings.memoryEnabled && settings.memoryAutoExtract) {
+        if (!sendingPhoto && memorySystem && settings.memoryEnabled && settings.memoryAutoExtract) {
             try {
                 const candidates = memorySystem.detectHighlightableText(text);
                 if (candidates && candidates.length > 0) userMsg.memoryHighlights = candidates;
@@ -5201,25 +5291,117 @@
         // "read" receipt and before the typing indicator appears.
         maybeAddCharacterReaction(newHistory.length - 1, text);
 
-        // Route to combined generation when all characters should respond together
+        scheduleCharacterReply();
+    }
+
+    // ── Reply scheduling ─────────────────────────────────────────────────────
+    // The user can send several texts in a row; the character answers once they
+    // pause. A reply the model is already writing finishes first, then the
+    // character follows up on whatever arrived meanwhile.
+
+    const REPLY_PAUSE_MS = 3000;
+
+    /** (Re)starts the pause before the character replies; each new text or keystroke resets it. */
+    function scheduleCharacterReply(delayMs = REPLY_PAUSE_MS) {
+        clearTimeout(replyTimer);
+        replyTimer = setTimeout(startCharacterReply, delayMs);
+    }
+
+    function cancelScheduledReply() {
+        clearTimeout(replyTimer);
+        replyTimer = null;
+        replyQueued = false;
+    }
+
+    function startCharacterReply() {
+        replyTimer = null;
+        if (isGenerating) {
+            replyQueued = true;
+            return;
+        }
+        replyQueued = false;
+        replyInProgress = true;
+        const history = getChatHistory();
         if (groupManager && groupManager.isGroupSession() && groupManager.isCombineMode()) {
-            generateEchoTextCombined(newHistory);
+            generateEchoTextCombined(history);
         } else {
-            generateEchoText(newHistory);
+            generateEchoText(history);
+        }
+        // Both generators set isGenerating synchronously when they actually start
+        if (!isGenerating) replyInProgress = false;
+    }
+
+    /** Called when a generation settles: runs a follow-up reply queued while it was busy. */
+    function onGenerationSettled() {
+        replyInProgress = false;
+        if (replyQueued) {
+            replyQueued = false;
+            scheduleCharacterReply(600);
+        }
+    }
+
+    /**
+     * `snapshot` plus any messages appended to the stored history since it was
+     * taken. The user can keep texting while a reply is generated, so a generation
+     * must save on top of those messages rather than over them.
+     */
+    function withMessagesSentSince(snapshot) {
+        const latest = getChatHistory();
+        if (latest.length <= snapshot.length) return snapshot;
+        const anchor = snapshot[snapshot.length - 1];
+        if (anchor && latest[snapshot.length - 1]?.send_date !== anchor.send_date) return snapshot;
+        return [...snapshot, ...latest.slice(snapshot.length)];
+    }
+
+    /**
+     * Indices of the user's messages the character hasn't read yet, newest first —
+     * after a burst of texts, all of them get delivered/read together.
+     */
+    function getUnreadUserMessageIndices(history) {
+        const indices = [];
+        for (let i = history.length - 1; i >= 0; i--) {
+            const msg = history[i];
+            if (!msg?.is_user) continue;
+            const state = msg.meta?.receipt?.state;
+            if (!state || state === 'read' || state === 'ghosted') break;
+            indices.push(i);
+        }
+        return indices;
+    }
+
+    /** Toggles photo compose mode: the photo button lights up and the placeholder asks for a description. */
+    function setPhotoComposeMode(on) {
+        photoComposeMode = !!on;
+        const input = jQuery('#et-input');
+        jQuery('#et-photo-btn').toggleClass('et-photo-btn-active', photoComposeMode)
+            .attr('title', photoComposeMode ? 'Cancel photo' : 'Send a photo — describe what it shows');
+        jQuery('.et-input-wrap').toggleClass('et-input-wrap-photo', photoComposeMode);
+        if (photoComposeMode) {
+            if (input.attr('placeholder') !== PHOTO_PLACEHOLDER) input.data('et-placeholder', input.attr('placeholder'));
+            input.attr('placeholder', PHOTO_PLACEHOLDER);
+        } else {
+            // Restore only if nothing (e.g. a character switch) has replaced the placeholder meanwhile
+            if (input.attr('placeholder') === PHOTO_PLACEHOLDER && input.data('et-placeholder') !== undefined) {
+                input.attr('placeholder', input.data('et-placeholder'));
+            }
+            input.removeData('et-placeholder');
         }
     }
 
     function updateSendButton(generating) {
         const btn = jQuery('#et-send-btn');
-        if (generating) {
+        // While a reply is being written the button cancels it — unless the user
+        // has typed another text, which they can send without interrupting
+        const hasDraft = !!String(jQuery('#et-input').val() || '').trim();
+        if (generating && !(replyInProgress && hasDraft)) {
             btn.addClass('et-send-stop').attr('title', 'Cancel generation');
             btn.html('<i class="fa-solid fa-stop"></i>');
-            updatePanelStatusRow({ typing: true });
         } else {
             btn.removeClass('et-send-stop').attr('title', 'Send message');
             btn.html('<i class="fa-solid fa-paper-plane"></i>');
-            updatePanelStatusRow();
         }
+        if (generating) updatePanelStatusRow({ typing: true });
+        else updatePanelStatusRow();
     }
 
     // ============================================================
@@ -5595,6 +5777,100 @@
         });
     }
 
+    /**
+     * Display parts for a message. Character replies get one bubble per line;
+     * user messages only split around rich content. Always returns at least one
+     * part so empty turns (e.g. a silent image reply) still get their bubble.
+     */
+    function getMessageDisplayParts(msg) {
+        const parts = RichMessages.parseMessageParts(msg?.mes, { splitLines: !msg?.is_user });
+        if (!parts.length) return [{ type: 'text', text: '' }];
+
+        // Weaker models sometimes prefix every line script-style ("Name: ...")
+        if (!msg.is_user) {
+            const senderName = msg.charName || getCharacterName();
+            const escaped = senderName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const prefix = new RegExp(`^${escaped}\\s*[:：]\\s*`);
+            for (const part of parts) {
+                if (part.type === 'text') part.text = part.text.replace(prefix, '');
+            }
+        }
+        const visible = parts.filter(part => part.type !== 'text' || part.text);
+        return visible.length ? visible : [{ type: 'text', text: '' }];
+    }
+
+    function buildPhotoCardHtml(desc) {
+        const safeDesc = escapeHtml(desc);
+        return `<div class="et-photo-card"${safeDesc ? ` title="${safeDesc}"` : ''}><div class="et-photo-card-frame"><i class="fa-regular fa-image"></i></div><div class="et-photo-card-caption">${safeDesc || 'Photo'}</div></div>`;
+    }
+
+    /** Inner content of one bubble: formatted text or a photo card. */
+    function buildPartContentHtml(part) {
+        return part.type === 'photo'
+            ? buildPhotoCardHtml(part.desc)
+            : `<div class="et-bubble-text">${formatMessageText(part.text)}</div>`;
+    }
+
+    /**
+     * Bubbles shown before a message's main (footer-bearing) bubble — one per part
+     * except the last, which goes in the main bubble itself.
+     */
+    function buildLeadingPartBubblesHtml(parts, sideClass) {
+        return parts.slice(0, -1).map(part =>
+            `<div class="et-bubble ${sideClass} et-bubble-part${part.type === 'photo' ? ' et-bubble-photo' : ''}">${buildPartContentHtml(part)}</div>`
+        ).join('');
+    }
+
+    // Character messages whose bubbles already played their arrival sequence,
+    // keyed by send_date, so later re-renders show them at once.
+    const staggeredMessageKeys = new Set();
+
+    /**
+     * A freshly arrived multi-bubble reply is revealed one bubble at a time;
+     * anything older (re-renders, reopening the panel, history) appears at once.
+     */
+    function shouldStaggerReveal(msg, partCount) {
+        if (msg.is_user || partCount < 2 || !msg.send_date) return false;
+        if (staggeredMessageKeys.has(msg.send_date)) return false;
+        staggeredMessageKeys.add(msg.send_date);
+        return Date.now() - msg.send_date < 15000;
+    }
+
+    /**
+     * Shows a character message's bubbles one after another, with a typing
+     * indicator in between paced by each bubble's length. Stops quietly if the
+     * message is re-rendered mid-sequence (the re-render shows every bubble).
+     */
+    function staggerRevealParts(msgEl) {
+        const bubbles = msgEl.find('.et-message-body > .et-bubble');
+        if (bubbles.length < 2) return;
+        bubbles.slice(1).hide();
+
+        const messagesEl = document.getElementById('et-messages');
+        const scrollToEnd = () => {
+            if (settings.autoScroll && messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
+        };
+
+        let next = 1;
+        const revealNext = () => {
+            if (!msgEl[0].isConnected) return;
+            const bubble = bubbles.eq(next);
+            const typing = jQuery('<div class="et-bubble et-bubble-char et-typing-bubble"><div class="et-typing-dots"><span></span><span></span><span></span></div></div>');
+            bubbles.eq(next - 1).after(typing);
+            scrollToEnd();
+            const length = bubble.find('.et-bubble-text, .et-photo-card-caption').text().trim().length;
+            setTimeout(() => {
+                typing.remove();
+                if (!msgEl[0].isConnected) return;
+                bubble.show().addClass('et-bubble-arrive');
+                scrollToEnd();
+                next++;
+                if (next < bubbles.length) setTimeout(revealNext, 220);
+            }, Math.min(1800, 450 + length * 35));
+        };
+        setTimeout(revealNext, 260);
+    }
+
     function buildImageAttachmentHtml(msg, index) {
         const attachment = msg?.imageAttachment;
         if (!attachment || attachment.type !== 'image') return '';
@@ -5825,7 +6101,9 @@
 
         history.forEach((msg, index) => {
             const isUser = msg.is_user;
-            const formattedText = formatMessageText(msg.mes);
+            const parts = getMessageDisplayParts(msg);
+            const mainPart = parts[parts.length - 1];
+            const mainPhotoClass = mainPart.type === 'photo' ? ' et-bubble-photo' : '';
             const msgDate = new Date(msg.send_date || Date.now());
             const time = msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
             const fullDateToolip = msgDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -5835,8 +6113,9 @@
                 const safeUserName = DOMPurify.sanitize(userName, { ALLOWED_TAGS: [] });
                 bubbleHtml = `
                 <div class="et-message et-message-user" data-index="${index}">
-                    <div class="et-bubble et-bubble-user">
-                        <div class="et-bubble-text">${formattedText}</div>
+                    ${buildLeadingPartBubblesHtml(parts, 'et-bubble-user')}
+                    <div class="et-bubble et-bubble-user et-bubble-main${mainPhotoClass}">
+                        ${buildPartContentHtml(mainPart)}
                         <div class="et-message-footer">
                             <span class="et-message-time" title="${fullDateToolip}">${time}</span>
                             <span class="et-user-name">${safeUserName}</span>
@@ -5876,9 +6155,9 @@
                 const verbosity = charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null;
                 const verbosityLabels = { short: '📏', medium: '📋', long: '📜' };
                 const verbosityTooltips = {
-                    short: 'Short: Concise and direct replies',
-                    medium: 'Medium: Standard conversational pace',
-                    long: 'Long: Expansive, detailed responses'
+                    short: 'Short: 1–2 texts per reply',
+                    medium: 'Medium: 2–4 texts per reply',
+                    long: 'Long: 4–7 texts per reply'
                 };
                 const verbosityBadge = verbosity && verbosity !== 'medium'
                     ? `<span class="et-verbosity-badge" title="${verbosityTooltips[verbosity] || 'Verbosity'}">${verbosityLabels[verbosity] || ''}</span>` : '';
@@ -5898,8 +6177,9 @@
                 bubbleHtml = `
                 <div class="et-message et-message-char" data-index="${index}">
                     <div class="et-message-body">
-                        <div class="et-bubble et-bubble-char">
-                            <div class="et-bubble-text">${formattedText}</div>
+                        ${buildLeadingPartBubblesHtml(parts, 'et-bubble-char')}
+                        <div class="et-bubble et-bubble-char et-bubble-main${mainPhotoClass}">
+                            ${buildPartContentHtml(mainPart)}
                             ${buildImageAttachmentHtml(msg, index)}
                             ${swipeNavHtml}
                             <div class="et-message-footer">
@@ -5923,6 +6203,10 @@
             }
 
             inner.append(bubbleHtml);
+
+            if (shouldStaggerReveal(msg, parts.length)) {
+                staggerRevealParts(inner.children().last());
+            }
 
             // Apply memory highlights to user bubbles
             if (isUser && msg.memoryHighlights && msg.memoryHighlights.length > 0
@@ -6208,11 +6492,20 @@
         if (action === 'edit') {
             closeAllDotMenus();
             const msgEl = jQuery(`.et-message[data-index="${msgIndex}"]`);
-            const bubble = msgEl.find('.et-bubble');
-            const textEl = msgEl.find('.et-bubble-text');
+            const bubble = msgEl.find('.et-bubble-main');
+            let textEl = bubble.find('.et-bubble-text');
 
             // Already editing?
             if (textEl.attr('contenteditable') === 'true') return;
+
+            // Multi-bubble / photo messages are edited as one raw text (tags included)
+            // in the main bubble; save or cancel re-renders the bubbles.
+            const isRich = msgEl.find('.et-bubble-part, .et-bubble-photo').length > 0;
+            if (isRich) {
+                msgEl.find('.et-bubble-part').hide();
+                bubble.removeClass('et-bubble-photo').find('.et-photo-card').hide();
+                if (!textEl.length) textEl = jQuery('<div class="et-bubble-text"></div>').prependTo(bubble);
+            }
 
             // Make bubble-text contenteditable in-place — no layout shift
             const originalHtml = textEl.html();
@@ -6257,7 +6550,8 @@
 
             toolbar.find('.et-edit-cancel').on('click', () => {
                 finishEdit();
-                textEl.html(originalHtml);
+                if (isRich) renderMessages(history, true);
+                else textEl.html(originalHtml);
             });
 
             // Also save on Enter (without shift), cancel on Escape
@@ -7317,6 +7611,8 @@
             getGroupManager: () => groupManager,
             applySelectedCharacterToPanel,
             setSelectedCharacterKey: (key) => {
+                // A reply pending for the previous character would go to the new one
+                if (key !== selectedCharacterKey) cancelScheduledReply();
                 selectedCharacterKey = key;
                 if (key) {
                     settings.lastCharacterKey = key;
@@ -7502,6 +7798,7 @@
         }
 
         _onChatChanged = async () => {
+            cancelScheduledReply();
             if (!settings.enabled) return;
 
             closeCharacterPicker();
