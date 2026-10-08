@@ -2095,16 +2095,16 @@
         // (recency) of the context window.
         //
         //  1. IDENTITY   — who the character IS (primacy anchor)
-        //  2. CHARACTER  — description, personality, scenario, persona, world info
-        //                  (stable knowledge the model must fully absorb before
-        //                   reading any dynamic content)
+        //  2. CHARACTER  — description, personality, scenario, persona, world info,
+        //                  plus the story opening and recent ST roleplay (narrative
+        //                  background kept far from the end so its prose style
+        //                  doesn't leak into replies)
         //  3. MEMORY     — inside jokes, emotion state, untethered influence flags
         //                  (semi-static contextual colour)
-        //  4. CONTINUITY — recent ST chat history (dynamic, recency-anchored so it
-        //                  directly informs the reply without drowning the character)
-        //  5. LOCK       — fiction frame + persona-lock reminder (recency anchor for
+        //  4. LOCK       — fiction frame + persona-lock reminder (recency anchor for
         //                  behaviour — last thing read before the model replies)
-        //  6. VERBOSITY  — formatting instruction (must be last)
+        //  5. VERBOSITY  — length instruction
+        //  6. FORMAT     — texting-medium anchor (must be last)
         // ───────────────────────────────────────────────────────────────────────
 
         // ── 1. IDENTITY ─────────────────────────────────────────────────────────
@@ -2174,18 +2174,25 @@
             prompt += `\n\n<character_reference>\n${charRefParts.join('\n\n')}\n</character_reference>`;
         }
 
-        // ── 2b. STORY OPENING ────────────────────────────────────────────────────
+        // ── 2b. STORY BACKGROUND ─────────────────────────────────────────────────
         // The greeting establishes the setting, the relationship with the user and —
-        // through the character's spoken lines — their voice. It sits with the stable
-        // character knowledge rather than after the behaviour lock, so its narrative
-        // prose is not at recency pulling replies into roleplay-style narration.
+        // through the character's spoken lines — their voice; the recent ST roleplay
+        // (Tethered only) keeps replies consistent with what has actually happened.
+        // Both are narrative prose, so they sit with the stable character knowledge,
+        // far from the end, and are framed as reference rather than text to continue.
+        const userName = getUserName();
         const openingText = getEchoTextFirstMessage(char);
         if (openingText) {
-            const userName = getUserName();
             const openingUse = tethered
-                ? `This is the opening scene of the roleplay between ${name} and ${userName}. Treat its setting and relationships as established facts.`
+                ? `This is how the roleplay between ${name} and ${userName} began. Treat its setting and relationships as established facts.`
                 : `This scene is not part of this conversation; use it only to learn ${name}'s voice.`;
-            prompt += `\n\n${openingUse} ${name}'s spoken lines in it are the reference for how ${name} talks — vocabulary, tone, attitude toward ${userName}, and speech quirks. Carry that voice into text messages, but do not imitate the scene's narration, action descriptions, or length.\n<story_opening>\n${openingText}\n</story_opening>`;
+            prompt += `\n\n${openingUse} ${name}'s spoken lines in it show how ${name} talks — vocabulary, tone, attitude toward ${userName}, and speech quirks. It is reference material written as narrative prose: never continue it or copy its narration.\n<story_opening>\n${openingText}\n</story_opening>`;
+        }
+        if (tethered) {
+            const storyText = getSTStoryContext(char);
+            if (storyText) {
+                prompt += `\n\nRecent events in the roleplay, oldest first. ${name} remembers all of this, and the text messages must stay consistent with it. It is reference material written as narrative prose: never continue the scene — ${name} is now texting ${userName} by phone.\n<story_so_far>\n${storyText}\n</story_so_far>`;
+            }
         }
 
         // Author's Note — special per-character instructions from SillyTavern.
@@ -2214,17 +2221,6 @@
         prompt += buildInsideJokesContext();
         if (tethered) {
             prompt += buildEmotionContext();
-        }
-
-        // ── 3b. STORY CONTINUITY (Tethered only) ────────────────────────────────
-        // Recent ST roleplay, so replies stay consistent with what has actually
-        // happened. Without it the closing instruction asks the model to follow a
-        // "current story context" it never sees, and it invents one instead.
-        if (tethered) {
-            const storyText = getSTStoryContext(char);
-            if (storyText) {
-                prompt += `\n\nRecent events in the roleplay, oldest first. ${name} remembers all of this; the text messages take place within this story and must stay consistent with it.\n<story_so_far>\n${storyText}\n</story_so_far>`;
-            }
         }
 
         // ── 4. BEHAVIOUR LOCK ────────────────────────────────────────────────────
@@ -2264,6 +2260,13 @@
         const charKey = getCharacterKey();
         const verbosity = charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null;
         prompt += '\n\n' + getVerbosityPrompt(verbosity);
+
+        // ── 7. TEXTING FORMAT ────────────────────────────────────────────────────
+        // Final anchor: with narrative story context in the prompt, models drift into
+        // roleplay narration and move stage directions into brackets when asterisks
+        // are banned. Stating the medium last keeps every reply an actual text.
+        const textingFormat = getPrompt('promptTextingFormat');
+        if (textingFormat) prompt += '\n\n' + textingFormat;
 
         return prompt;
     }
