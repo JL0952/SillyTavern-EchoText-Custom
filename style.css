@@ -10651,13 +10651,9 @@ details.et-te-advanced[open] .et-te-advanced-toggle::before { transform: rotate(
    USER BUBBLE
    ──────────────────────────────────────────────────────────────── */
 
-/* Neutralise the bare rule so our specific rule is the only source */
-.et-bubble-user {
-    background: transparent !important;
-    box-shadow: none !important;
-    border: none !important;
-    border-radius: 0 !important;
-}
+/* The legacy .et-bubble-user look is overridden by the higher-specificity rule
+   below. (An !important "neutralise" rule used to sit here; it also wiped out
+   that rule's surface, leaving user messages with no visible bubble.) */
 
 /* High-specificity rule that controls the full user bubble look */
 .et-message-user .et-bubble {
@@ -12108,29 +12104,6 @@ textarea.et-mem-save-snippet-edit::placeholder {
     opacity: 0.8;
 }
 
-/* User bubbles have no visible surface (see .et-bubble-user above), so whatever
-   is inside them must share one right edge: text blocks hug the right side even
-   when the footer makes the bubble wider, and cards keep the bubble's 16px inset */
-.et-message-user .et-bubble {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-}
-
-.et-message-user .et-bubble > .et-message-footer {
-    align-self: stretch;
-}
-
-.et-message.et-message-user .et-bubble.et-bubble-card {
-    padding-left: 16px;
-    padding-right: 16px;
-}
-
-.et-message.et-message-user .et-bubble-card .et-message-footer {
-    padding-left: 0;
-    padding-right: 0;
-}
-
 /* Each bubble of a multi-bubble reply sizes to its own text instead of
    stretching to the widest bubble in the message */
 .et-message-char .et-message-body {
@@ -12403,4 +12376,22 @@ textarea.et-mem-save-snippet-edit::placeholder {
     .et-part-dots-btn {
         opacity: 0.45;
     }
+}
+
+/* A character reply that is only a reaction: a quiet note in the reply's place
+   (the reaction itself shows on the user's message) */
+.et-reaction-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 12px;
+    border-radius: 18px;
+    font-size: 0.78rem;
+    color: var(--et-text-muted);
+    background: color-mix(in srgb, var(--et-theme-color) 8%, rgba(255, 255, 255, 0.04));
+    border: 1px solid color-mix(in srgb, var(--et-theme-color) 20%, transparent);
+}
+
+.et-reaction-note i {
+    color: var(--react-color, var(--et-theme-color));
 }

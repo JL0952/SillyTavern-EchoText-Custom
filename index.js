@@ -1902,11 +1902,15 @@
         if (!safeHistory.length) return '';
 
         const memberMap = new Map(safeMembers.map(member => [member.avatar || member.name, member.name || 'Character']));
-        const lines = safeHistory.map(msg => {
+        const lines = safeHistory.flatMap(msg => {
             const sender = msg.is_user
                 ? getUserName()
                 : (msg.charName || memberMap.get(msg.charKey) || getCharacterName());
-            return `${sender}: ${getContextMessageText(msg.mes)}`;
+            const line = `${sender}: ${getContextMessageText(msg.mes)}`;
+            const reactions = getUserReactionIds(msg);
+            return reactions.length
+                ? [line, `[${getUserName()} reacted ${reactions.join(', ')} to ${sender}'s message]`]
+                : [line];
         }).filter(Boolean);
 
         return lines.length
@@ -1985,12 +1989,13 @@
         // ── 3. Prior history as attributed message turns ──────────────────────
         // Assistant turns get "[CharName]: " prefixed so the model never mistakes
         // another character's line as its own prior output.
-        const historyMessages = priorHistory.map(msg => {
+        const historyMessages = priorHistory.flatMap(msg => {
             if (msg.is_user) {
-                return { role: 'user', content: getContextMessageText(msg.mes) };
+                return [{ role: 'user', content: getContextMessageText(msg.mes) }];
             }
             const speaker = msg.charName || charName;
-            return { role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` };
+            return [{ role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` },
+                ...buildCombinedReactionTurns(msg, speaker)];
         });
 
         // ── 4. Final user turn: input + persona + character card + cue ────────
@@ -2310,6 +2315,7 @@
         return [
             `MESSAGES: Put each text on its own line — every line reaches ${userName} as a separate message bubble.`,
             `PHOTOS: ${charName} can send photos. Write a photo on its own line as <photo>what the photo shows</photo> — a short, concrete description of the picture, written in the same language as the conversation — and ${userName} sees it as an actual picture. Write the description as a neutral caption of what is visible, with no first- or second-person pronouns: refer to people by name (${charName}, ${userName}) instead of I/me/my/you. Send one whenever ${charName} naturally would, such as when asked for a picture, but never use it to describe ${charName}'s own actions. A <photo> from ${userName} is a picture they sent: react to what it shows.`,
+            `REACTIONS: ${charName} can react to ${userName}'s latest message with a tapback by writing <react>name</react> on its own line, where name is one of: heart, haha, wow, sad, fire, like, star, bolt. Use one only now and then, when a quick reaction genuinely fits — most replies need none. A reaction usually comes with text messages, but occasionally it can be the whole reply. A <react> from ${userName} is their tapback on ${charName}'s message just before it — ${charName} may notice it, but it doesn't need an answer of its own.`,
             `TRANSFERS: ${charName} can send ${userName} money by writing <transfer>amount</transfer> on its own line, with the amount as a plain number. When ${userName} sends ${charName} a <transfer>, ${charName} can accept it with <transfer_accept/> or decline it with <transfer_decline/> on its own line, or leave it pending for now. A <transfer_accept> or <transfer_decline> from ${userName} means they accepted or declined ${charName}'s transfer. Only send or answer transfers when it fits the story.`
         ].join('\n');
     }
@@ -2913,6 +2919,31 @@
         return RichMessages.normalizeMessageTags(stripThinkingTags(mes || ''));
     }
 
+    /** Combined mode has no format rules, so the user's tapbacks are spelled out in words. */
+    function buildCombinedReactionTurns(msg, speaker) {
+        const reactions = getUserReactionIds(msg);
+        return reactions.length
+            ? [{ role: 'user', content: `[${getUserName()} reacted ${reactions.join(', ')} to ${speaker}'s message]` }]
+            : [];
+    }
+
+    /** Ids of the user's tapbacks on a character message (none on user messages). */
+    function getUserReactionIds(msg) {
+        if (!msg || msg.is_user) return [];
+        return Object.entries(normalizeReactionStore(msg.reactions))
+            .filter(([id, data]) => data.mine && FA_REACTIONS.some(r => r.id === id))
+            .map(([id]) => id);
+    }
+
+    /**
+     * The user's tapbacks on a character message as the model sees them: a user
+     * turn right after that message, using the same <react> tag the character
+     * reacts with. '' when the user hasn't reacted.
+     */
+    function buildUserReactionText(msg) {
+        return getUserReactionIds(msg).map(id => `<react>${id}</react>`).join('\n');
+    }
+
     /**
      * Resolves the text to use for a history message when building API context.
      *
@@ -2954,6 +2985,8 @@
             // so the model never sees an empty assistant response to a photo request.
             const contextText = resolveHistoryMessageText(msg);
             apiMessages.push({ role: msg.is_user ? 'user' : 'assistant', content: contextText });
+            const reactionText = buildUserReactionText(msg);
+            if (reactionText) apiMessages.push({ role: 'user', content: reactionText });
         });
 
         // --- Layer 3: Pre-fill assistant turn (anti-refusal, chat-completion backends only) ---
@@ -2968,6 +3001,8 @@
         let rawPrompt = '';
         history.forEach(msg => {
             rawPrompt += `${msg.is_user ? getUserName() : getCharacterName()}: ${resolveHistoryMessageText(msg)}\n`;
+            const reactionText = buildUserReactionText(msg);
+            if (reactionText) rawPrompt += `${getUserName()}: ${reactionText}\n`;
         });
         rawPrompt += `${getCharacterName()}:`;
 
@@ -3009,6 +3044,8 @@
             // so group-member context windows also see a closed loop for image turns.
             const contextText = resolveHistoryMessageText(msg);
             apiMessages.push({ role: msg.is_user ? 'user' : 'assistant', content: contextText });
+            const reactionText = buildUserReactionText(msg);
+            if (reactionText) apiMessages.push({ role: 'user', content: reactionText });
         });
 
         const charName = (char && char.name) || getCharacterName();
@@ -3016,6 +3053,8 @@
         let rawPrompt = '';
         history.forEach(msg => {
             rawPrompt += `${msg.is_user ? userName : charName}: ${resolveHistoryMessageText(msg)}\n`;
+            const reactionText = buildUserReactionText(msg);
+            if (reactionText) rawPrompt += `${userName}: ${reactionText}\n`;
         });
         rawPrompt += `${charName}:`;
 
@@ -3270,9 +3309,11 @@
         const msgEl = inner.find(`.et-message[data-index="${msgIndex}"]`);
         // Multi-bubble or photo messages (before or after the swipe) are rebuilt
         // rather than patched in place
+        // ...as are swipes whose reaction (shown on the user's message) may change
         const newParts = getMessageDisplayParts(msg);
         if (!msgEl.length || newParts.length > 1 || newParts[0].type !== 'text'
-                || msgEl.find('.et-bubble-part, .et-bubble-card').length) {
+                || msgEl.find('.et-bubble-part, .et-bubble-card').length
+                || getMessageReactions(msg).length || inner.find('.et-char-reaction-pill').length) {
             renderMessages(h, true);
             return;
         }
@@ -3711,12 +3752,13 @@
         // ── 2. Full history as attributed turns (no splitting) ────────────────
         // Every message is included so the model can see all prior character
         // replies, even those that came after the last user message.
-        const historyMessages = allHistory.map(msg => {
+        const historyMessages = allHistory.flatMap(msg => {
             if (msg.is_user) {
-                return { role: 'user', content: getContextMessageText(msg.mes) };
+                return [{ role: 'user', content: getContextMessageText(msg.mes) }];
             }
             const speaker = msg.charName || charName;
-            return { role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` };
+            return [{ role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` },
+                ...buildCombinedReactionTurns(msg, speaker)];
         });
 
         // ── 3. Final user turn: persona + character card + stance + verbosity ──
@@ -5290,12 +5332,7 @@
                 if (candidates && candidates.length > 0) userMsg.memoryHighlights = candidates;
             } catch (e) { /* ignore detection errors */ }
         }
-        const newHistory = postUserMessage(userMsg);
-
-        // Schedule a probabilistic character reaction — fire-and-forget, independent
-        // of the generation pipeline. The timing jitter lands naturally after the
-        // "read" receipt and before the typing indicator appears.
-        if (!mode) maybeAddCharacterReaction(newHistory.length - 1, text);
+        postUserMessage(userMsg);
     }
 
     function createUserMessage(mes) {
@@ -5691,87 +5728,13 @@
         if (panelOpen && isTetheredMode()) updatePanelStatusRow();
     }
 
-    // Thin wrapper — delegates to emotion-system.js
-    function selectCharacterReaction(userMessageText) {
-        if (!emotionSystem) return null;
-        return emotionSystem.selectCharacterReaction(userMessageText);
-    }
-
     // ============================================================
     // AI CHARACTER REACTIONS TO USER MESSAGES
     // ============================================================
-
-    /**
-     * Schedules a probabilistic emoji reaction from the character to the user's
-     * most-recently-sent message. Called fire-and-forget from handleSend() so it
-     * runs entirely outside the generation pipeline.
-     *
-     * Timing: reaction arrives ~readDelayMs + 1200-4500ms after message send,
-     * which means it lands naturally after the "read" receipt ticks but before
-     * (or shortly after) the typing indicator appears — exactly when a real person
-     * would tap a react emoji after reading.
-     *
-     * @param {number} userMsgIndex - index of the user message in chat history
-     * @param {string} userText     - raw text of the user's message
-     */
-    function maybeAddCharacterReaction(userMsgIndex, userText) {
-        if (settings.emotionSystemEnabled === false) return;
-        if (!emotionSystem) return;
-
-        // selectCharacterReaction performs the dry-run delta analysis and returns
-        // { reactionId, probability, magnitude } or null if nothing fits.
-        const candidate = selectCharacterReaction(userText);
-        if (!candidate) return;
-
-        // Probability roll — personality and impact weighted
-        if (Math.random() >= candidate.probability) return;
-
-        // Jitter delay: mirrors the "read" timing so the reaction feels organic.
-        // The character has "read" the message (readDelayMs) and then takes an
-        // additional moment (1200–4500ms) before tapping react — just like iMessage.
-        const timing = getEmotionReplyTimingModel();
-        const baseDelay  = timing.readDelayMs;
-        const jitterMs   = Math.round(1200 + Math.random() * 3300);
-        const totalDelay = baseDelay + jitterMs;
-
-        setTimeout(() => {
-            // Guard: bail if the panel was closed or the history has changed underneath us
-            if (!panelOpen) return;
-            if (settings.emotionSystemEnabled === false) return;
-            const history = getChatHistory();
-            if (!history[userMsgIndex] || !history[userMsgIndex].is_user) return;
-
-            addCharacterReaction(userMsgIndex, candidate.reactionId);
-        }, totalDelay);
-    }
-
-    /**
-     * Stores the character's emoji reaction on the user message object and
-     * updates the DOM in-place. The character can only hold one reaction per
-     * user message (same as how real iMessage reacts work — one reaction per
-     * sender per message).
-     *
-     * @param {number} msgIndex   - index of the user message in chat history
-     * @param {string} reactionId - FA_REACTIONS id (heart, haha, wow, etc.)
-     */
-    function addCharacterReaction(msgIndex, reactionId) {
-        const reactDef = FA_REACTIONS.find(r => r.id === reactionId);
-        if (!reactDef) return;
-
-        const history = getChatHistory();
-        const msg = history[msgIndex];
-        if (!msg || !msg.is_user) return;
-
-        // Toggle off if the same reaction exists (character changed their mind)
-        if (msg.charReaction === reactionId) {
-            delete msg.charReaction;
-        } else {
-            msg.charReaction = reactionId;
-        }
-
-        saveChatHistory(history);
-        renderCharacterReaction(msgIndex, msg.charReaction || null);
-    }
+    // The model reacts by writing <react>name</react> in its reply; the reaction
+    // shows on the user's latest message before that reply (see renderMessages).
+    // Older chats may still carry a stored msg.charReaction from the former
+    // keyword-based auto-reaction, which is shown the same way.
 
     /**
      * Updates the character reaction pill under a user bubble in the DOM.
@@ -5911,12 +5874,18 @@
 
     /**
      * Display parts for a message. Character replies get one bubble per line;
-     * user messages only split around rich content. Always returns at least one
+     * user messages only split around rich content. <react> tags aren't bubbles
+     * (they show on the user's message — see getMessageReactions); a reply that
+     * is only a reaction gets a small note instead. Always returns at least one
      * part so empty turns (e.g. a silent image reply) still get their bubble.
      */
     function getMessageDisplayParts(msg) {
-        const parts = RichMessages.parseMessageParts(msg?.mes, { splitLines: !msg?.is_user });
-        if (!parts.length) return [{ type: 'text', text: '' }];
+        const allParts = RichMessages.parseMessageParts(msg?.mes, { splitLines: !msg?.is_user });
+        const parts = allParts.filter(part => part.type !== 'react');
+        if (!parts.length) {
+            const reaction = allParts.find(part => part.reaction)?.reaction;
+            return [reaction ? { type: 'reaction_note', reaction } : { type: 'text', text: '' }];
+        }
 
         // Weaker models sometimes prefix every line script-style ("Name: ...")
         if (!msg.is_user) {
@@ -5929,6 +5898,21 @@
         }
         const visible = parts.filter(part => part.type !== 'text' || part.text);
         return visible.length ? visible : [{ type: 'text', text: '' }];
+    }
+
+    /** Reaction ids a character's message applies with <react> tags. */
+    function getMessageReactions(msg) {
+        if (!msg || msg.is_user) return [];
+        return RichMessages.parseMessageParts(msg.mes)
+            .filter(part => part.type === 'react' && FA_REACTIONS.some(r => r.id === part.reaction))
+            .map(part => part.reaction);
+    }
+
+    /** Stand-in for a reply that is only a reaction (the reaction itself shows on the user's message). */
+    function buildReactionNoteHtml(reactionId) {
+        const def = FA_REACTIONS.find(r => r.id === reactionId);
+        const icon = def ? `<i class="${def.icon}" style="--react-color:${def.color}"></i>` : '';
+        return `<div class="et-reaction-note">${icon}<span>Reacted to your message</span></div>`;
     }
 
     /** A photo shows only its frame; tapping it reveals the description inside. */
@@ -5967,6 +5951,7 @@
     /** Inner content of one bubble: formatted text, a photo card, or a transfer card. */
     function buildPartContentHtml(part, transfer, isUser) {
         if (part.type === 'photo') return buildPhotoCardHtml(part.desc);
+        if (part.type === 'reaction_note') return buildReactionNoteHtml(part.reaction);
         if (part.type !== 'text') return buildTransferCardHtml(part, transfer, isUser);
         return `<div class="et-bubble-text">${formatMessageText(part.text)}</div>`;
     }
@@ -5975,7 +5960,7 @@
     function partBubbleClass(part) {
         if (part.type === 'text') return '';
         // Transfers and their accept/decline responses share the standalone card style
-        const kind = part.type.startsWith('transfer') ? 'transfer' : part.type;
+        const kind = part.type.startsWith('transfer') ? 'transfer' : part.type === 'reaction_note' ? 'reaction' : part.type;
         return ` et-bubble-card et-bubble-${kind}`;
     }
 
@@ -6330,6 +6315,16 @@
         const allParts = history.map(getMessageDisplayParts);
         const transfers = resolveTransfers(history, allParts);
 
+        // A character's <react> applies to the user's latest message before the reply
+        const tagReactions = new Map();
+        let lastUserIndex = -1;
+        history.forEach((m, i) => {
+            if (m.is_user) lastUserIndex = i;
+            else if (lastUserIndex >= 0) {
+                for (const reaction of getMessageReactions(m)) tagReactions.set(lastUserIndex, reaction);
+            }
+        });
+
         history.forEach((msg, index) => {
             const isUser = msg.is_user;
             const parts = allParts[index];
@@ -6455,8 +6450,10 @@
             }
 
             // Restore persisted character reactions on user bubbles
-            if (isUser && msg.charReaction) {
-                renderCharacterReaction(index, msg.charReaction);
+            // Reaction from a <react> tag, else one stored by the former auto-reaction
+            const charReaction = isUser ? (tagReactions.get(index) || msg.charReaction) : null;
+            if (charReaction) {
+                renderCharacterReaction(index, charReaction);
             }
         });
 
@@ -6726,12 +6723,14 @@
     function deleteMessagePart(history, msgIndex, partIndex) {
         const msg = history[msgIndex];
         const remaining = getMessageDisplayParts(msg).filter((part, j) => j !== partIndex
-            && (part.type !== 'text' || part.text));
-        if (!remaining.length && !msg.imageAttachment) {
+            && part.type !== 'reaction_note' && (part.type !== 'text' || part.text));
+        // <react> tags aren't bubbles, so they survive deleting one
+        const reactions = RichMessages.parseMessageParts(msg.mes).filter(part => part.type === 'react');
+        if (!remaining.length && !reactions.length && !msg.imageAttachment) {
             history.splice(msgIndex, 1);
             return;
         }
-        msg.mes = RichMessages.serializeParts(remaining);
+        msg.mes = RichMessages.serializeParts([...remaining, ...reactions]);
         const swipe = Array.isArray(msg.swipes) ? msg.swipes[msg.swipeIndex ?? 0] : null;
         if (swipe) swipe.mes = msg.mes;
     }
@@ -7960,6 +7959,7 @@
             isTetheredMode,
             getCurrentCharacter,
             getCharacterKey,
+            getUserName,
             getChatHistory,
             saveChatHistory,
             renderMessages,
