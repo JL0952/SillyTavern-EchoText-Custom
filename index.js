@@ -5258,12 +5258,13 @@
         if (mode === 'photo') {
             mes = `<photo>${text.replace(/\s*\n\s*/g, ' ')}</photo>`;
         } else if (mode === 'transfer') {
-            const amount = parseTransferAmount(text);
+            const amount = RichMessages.parseAmount(text);
             if (!amount) {
-                toastr.warning('Enter an amount greater than 0, like 52 or 13.14.');
+                toastr.warning('Enter an amount greater than 0, like 52, $20 or 13.14元.');
                 return;
             }
-            mes = `<transfer>${amount}</transfer>`;
+            // No currency typed: use the chat's, written out so this transfer keeps it
+            mes = `<transfer>${amount.symbol || getChatCurrency()}${amount.value}</transfer>`;
         }
 
         // Empty send — reply right away (skipping any pending pause), or nudge a
@@ -5322,14 +5323,6 @@
         renderMessages(newHistory);
         scheduleCharacterReply();
         return newHistory;
-    }
-
-    /** "52.00" for a valid positive amount (up to two decimals), else null. */
-    function parseTransferAmount(text) {
-        const cleaned = String(text).replace(/[¥￥$,，\s元块]/g, '');
-        if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null;
-        const value = Number(cleaned);
-        return value > 0 ? value.toFixed(2) : null;
     }
 
     /**
@@ -5431,23 +5424,24 @@
         composeMode = COMPOSE_MODES[mode] ? mode : null;
         const config = COMPOSE_MODES[composeMode];
         const input = jQuery('#et-input');
-        const placeholders = Object.values(COMPOSE_MODES).map(m => m.placeholder);
         jQuery('#et-attach-btn')
             .toggleClass('et-attach-btn-active', !!config)
             .attr('title', config ? `Cancel ${config.label.toLowerCase()}` : 'Photo or transfer')
             .html(`<i class="fa-solid ${config ? config.icon : 'fa-plus'}"></i>`);
         jQuery('.et-input-wrap').toggleClass('et-input-wrap-compose', !!config);
+        const composePlaceholder = input.data('et-compose-placeholder');
         if (config) {
-            if (!placeholders.includes(input.attr('placeholder'))) input.data('et-placeholder', input.attr('placeholder'));
-            input.attr('placeholder', config.placeholder);
-            if (composeMode === 'transfer') input.attr('inputmode', 'decimal');
-            else input.removeAttr('inputmode');
+            if (input.attr('placeholder') !== composePlaceholder) input.data('et-placeholder', input.attr('placeholder'));
+            const placeholder = composeMode === 'transfer'
+                ? `${config.placeholder} (${getChatCurrency()})`
+                : config.placeholder;
+            input.attr('placeholder', placeholder).data('et-compose-placeholder', placeholder);
         } else {
             // Restore only if nothing (e.g. a character switch) has replaced the placeholder meanwhile
-            if (placeholders.includes(input.attr('placeholder')) && input.data('et-placeholder') !== undefined) {
+            if (input.attr('placeholder') === composePlaceholder && input.data('et-placeholder') !== undefined) {
                 input.attr('placeholder', input.data('et-placeholder'));
             }
-            input.removeData('et-placeholder').removeAttr('inputmode');
+            input.removeData('et-placeholder').removeData('et-compose-placeholder');
         }
     }
 
@@ -5963,8 +5957,10 @@
             icon = accepted ? 'fa-circle-check' : 'fa-arrow-rotate-left';
             label = accepted ? 'Received' : 'Declined';
         }
-        const amountText = escapeHtml(RichMessages.formatAmount(amount) || 'Transfer');
-        const actionAttrs = actionable ? ` data-amount="${escapeHtml(amount)}" role="button" tabindex="0"` : '';
+        const displayAmount = RichMessages.formatAmount(amount, transfer?.symbol);
+        const amountText = escapeHtml(displayAmount || 'Transfer');
+        // The response tag names the currency explicitly ("$20.00")
+        const actionAttrs = actionable ? ` data-amount="${escapeHtml(displayAmount)}" role="button" tabindex="0"` : '';
         return `<div class="et-transfer-card et-transfer-${state}${actionable ? ' et-transfer-actionable' : ''}"${actionAttrs}><div class="et-transfer-body"><div class="et-transfer-icon"><i class="fa-solid ${icon}"></i></div><div class="et-transfer-info"><div class="et-transfer-amount">${amountText}</div><div class="et-transfer-status">${label}</div></div></div><div class="et-transfer-footer">Transfer</div></div>`;
     }
 
@@ -5996,33 +5992,56 @@
     /**
      * Works out every transfer's status from the responses that follow it. A
      * <transfer_accept>/<transfer_decline> settles a pending transfer from the
-     * other side — the latest one with the same amount, else the latest one — and
+     * other side — the latest one with the same value, else the latest one — and
      * takes that transfer's amount when it names none.
+     *
+     * Currency: an amount without a symbol (models usually write a bare number)
+     * uses the last currency named earlier in the chat, else the default.
      * @returns {Map<string, object>} keyed "messageIndex:partIndex" — transfers get
-     *   { status, amount }, responses get { amount }
+     *   { status, amount, symbol }, responses get { amount, symbol }
      */
     function resolveTransfers(history, allParts) {
         const info = new Map();
         const pending = { user: [], char: [] };
+        let chatCurrency = RichMessages.DEFAULT_CURRENCY;
         history.forEach((msg, i) => {
             const side = msg.is_user ? 'user' : 'char';
             const other = msg.is_user ? 'char' : 'user';
             allParts[i].forEach((part, j) => {
+                if (part.type !== 'transfer' && part.type !== 'transfer_accept' && part.type !== 'transfer_decline') return;
+                const { symbol: ownSymbol, value } = RichMessages.splitAmount(part.amount);
                 if (part.type === 'transfer') {
-                    const entry = { status: 'pending', amount: part.amount };
+                    const entry = { status: 'pending', amount: part.amount, value, symbol: ownSymbol || chatCurrency };
                     info.set(`${i}:${j}`, entry);
                     pending[side].push(entry);
-                } else if (part.type === 'transfer_accept' || part.type === 'transfer_decline') {
+                } else {
                     const queue = pending[other];
-                    let k = queue.map(t => t.amount).lastIndexOf(part.amount);
+                    let k = value ? queue.map(t => t.value).lastIndexOf(value) : -1;
                     if (k === -1) k = queue.length - 1;
                     const target = k >= 0 ? queue.splice(k, 1)[0] : null;
                     if (target) target.status = part.type === 'transfer_accept' ? 'accepted' : 'declined';
-                    info.set(`${i}:${j}`, { amount: part.amount || target?.amount || '' });
+                    info.set(`${i}:${j}`, {
+                        amount: part.amount || target?.amount || '',
+                        symbol: ownSymbol || target?.symbol || chatCurrency,
+                    });
                 }
+                if (ownSymbol) chatCurrency = ownSymbol;
             });
         });
         return info;
+    }
+
+    /** The currency a new transfer defaults to: the last one named in this chat, else the default. */
+    function getChatCurrency() {
+        const history = getChatHistory();
+        for (let i = history.length - 1; i >= 0; i--) {
+            const parts = getMessageDisplayParts(history[i]);
+            for (let j = parts.length - 1; j >= 0; j--) {
+                const symbol = parts[j].amount ? RichMessages.splitAmount(parts[j].amount).symbol : '';
+                if (symbol) return symbol;
+            }
+        }
+        return RichMessages.DEFAULT_CURRENCY;
     }
 
     // Consecutive user messages sent within this window render as one group: only
