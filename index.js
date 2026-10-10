@@ -6314,7 +6314,29 @@
     }
 
     function bindMessageActions() {
-        jQuery('#et-messages-inner').off('click.et-actions').on('click.et-actions', '[data-et-action]', onMessageAction);
+        const inner = jQuery('#et-messages-inner');
+        inner.off('click.et-actions').on('click.et-actions', '[data-et-action]', onMessageAction);
+        // Capture phase: a tap on a photo or card inside a bubble counts too, though
+        // its own action stops the click from bubbling
+        const el = inner[0];
+        if (el && !el._etBubbleTapBound) {
+            el._etBubbleTapBound = true;
+            el.addEventListener('click', onBubbleTap, true);
+        }
+    }
+
+    /**
+     * A tap on a bubble marks it data-et-revealed (and unmarks the rest); a second
+     * tap on it, or a tap elsewhere in the list, unmarks it. Platforms use it to show
+     * a bubble's controls on touch screens only when asked (WeChat's "⋯").
+     */
+    function onBubbleTap(e) {
+        // The revealed control itself
+        if (e.target.closest('[data-et-action="menu"], [data-et-action="part-menu"]')) return;
+        const bubble = e.target.closest('[data-et-role~="bubble"]');
+        const wasRevealed = !!bubble?.hasAttribute('data-et-revealed');
+        this.querySelectorAll('[data-et-revealed]').forEach(b => b.removeAttribute('data-et-revealed'));
+        if (bubble && !wasRevealed) bubble.setAttribute('data-et-revealed', '');
     }
 
     /**

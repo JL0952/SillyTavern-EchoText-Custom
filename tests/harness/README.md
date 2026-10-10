@@ -21,7 +21,7 @@ DOMPurify and Font Awesome are copied from SillyTavern.
 |---|---|---|
 | `index.html` | Every scenario rendered by the ref and the working tree: same HTML and, per element, the same click → call (or, when the markup changed on purpose, the same set of calls). Then `refreshMessages`, in-place `renderMessages`, touch swipe, inline edit, the platform picker, for EchoText and WeChat. `?preview` shows only WeChat, light and dark. | On the page; `window.__results` (scenarios), `window.__refresh` (tests), `window.__done` |
 | `chrome.html` | The panel header and input bar in each state (empty, draft, typing, generating, composing, menu open). `?platform=`, `?schemes=light,dark`, `?only=<state>` | Screenshots |
-| `panel.html` | The "+" panel: `runPanelTest()` (opens, closes on "+" / tile / list / input, platform switch) and `runAnchorTest()` (the list follows the panel, with and without the height transition) | Returned objects |
+| `panel.html` | The "+" panel: `runPanelTest()` (opens, closes on "+" / tile / list / input, platform switch, "+" and 发送 never both shown) and `runAnchorTest()` (the list follows the panel, with and without the height transition). `runRevealTest()`: on touch screens a bubble's "⋯" shows only after the bubble is tapped (run with the Browser pane's mobile preset) | Returned objects |
 | `scroll.html` | `runScroll('echotext' \| 'wechat')`: sending, a reply and a full render never scroll the list up | Returned string |
 
 Animation-frame tests need the page visible (a hidden tab doesn't run frames).

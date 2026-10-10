@@ -113,6 +113,33 @@ window.runPanelTest = async function () {
     return res;
 };
 
+// Touch screens: a bubble's "⋯" stays hidden until the bubble is tapped (text or
+// photo); a second tap or a tap elsewhere hides it, tapping "⋯" keeps it. Run with
+// the Browser pane on its mobile preset, so (hover: none) matches.
+window.runRevealTest = async function () {
+    if (!matchMedia('(hover: none)').matches) return { skipped: 'needs a touch screen (hover: none)' };
+    r.bindMessageActions();
+    const inner = document.getElementById('et-messages-inner');
+    const rows = [...inner.querySelectorAll('.wx-row')];
+    const shown = () => rows.filter(row => getComputedStyle(row.querySelector('.wx-more')).pointerEvents !== 'none').map(row => rows.indexOf(row)).join(',');
+    const textRow = rows.find(row => row.querySelector('.wx-text p:not(:empty)'));
+    const photoRow = rows.find(row => row.querySelector('.wx-photo'));
+    const res = { initial: shown() };
+    textRow.querySelector('.wx-text p').click();
+    res.textTap = shown();
+    textRow.querySelector('.wx-text p').click();
+    res.secondTap = shown();
+    photoRow.querySelector('.wx-photo').click();
+    res.photoTap = shown();
+    photoRow.querySelector('.wx-more').click();
+    res.menuTap = shown();
+    inner.click();
+    res.elsewhere = shown();
+    const t = String(rows.indexOf(textRow)), p = String(rows.indexOf(photoRow));
+    res.ok = res.initial === '' && res.textTap === t && res.secondTap === '' && res.photoTap === p && res.menuTap === p && res.elsewhere === '';
+    return res;
+};
+
 // While the panel rises and falls, the message nearest the input bar keeps its
 // distance from it, and the list ends where it started — with the height
 // transition and without one (a browser that doesn't run it), at the end of the

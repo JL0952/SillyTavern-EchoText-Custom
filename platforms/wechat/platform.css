@@ -756,7 +756,7 @@
 
 /* ── EchoText controls (WeChat has none; kept quiet) ────────── */
 
-/* More options: shows on hover, faintly on touch screens */
+/* More options: shows on hover; on touch screens, once the bubble is tapped */
 [data-platform="wechat"] .wx-more {
     flex: 0 0 auto;
     align-self: center;
@@ -776,9 +776,19 @@
     opacity: 1;
 }
 
+/* Touch screens: hidden (and untappable) until its bubble is tapped, which the
+   core marks data-et-revealed; a tap elsewhere hides it again. Hover is overridden
+   because iOS leaves :hover on whatever was tapped last */
 @media (hover: none) {
-    [data-platform="wechat"] .wx-more {
-        opacity: 0.45;
+    [data-platform="wechat"] .wx-more,
+    [data-platform="wechat"] .wx-row:hover .wx-more {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    [data-platform="wechat"] .wx-row[data-et-revealed] .wx-more {
+        opacity: 1;
+        pointer-events: auto;
     }
 }
 
