@@ -4815,7 +4815,11 @@
                             <i class="fa-solid fa-gear"></i>
                             <span>Settings</span>
                         </div>
-                        <!-- Stand-ins for the mode toggle and status row, for platform headers without them -->
+                        <!-- Stand-ins for the header's character picker, mode toggle and status row, for platform headers without them -->
+                        <div class="et-overflow-menu-item et-overflow-header-only" id="et-overflow-character">
+                            <i class="fa-solid fa-user-group"></i>
+                            <span>Switch Character</span>
+                        </div>
                         <div class="et-overflow-menu-item et-overflow-header-only" id="et-overflow-mode">
                             ${modeMenuItemInner(tethered)}
                         </div>
@@ -5079,7 +5083,13 @@
             moveModalToPortal('#et-ctx-overlay');
         });
 
-        // Shown only by platforms whose header hides the mode toggle and status row
+        // Shown only by platforms whose header hides the picker caret, mode toggle and status row
+        jQuery('#et-overflow-character').on('click', (e) => {
+            e.stopPropagation();
+            closeOverflowMenu();
+            jQuery('#et-char-name').trigger('click');
+        });
+
         jQuery('#et-overflow-mode').on('click', (e) => {
             e.stopPropagation();
             closeOverflowMenu();
@@ -5562,6 +5572,8 @@
         }).join('');
         if (!tiles) return;
         const panel = jQuery(`<div class="et-attach-panel" id="et-attach-panel" data-et-role="attach-panel"><div class="et-attach-panel-list">${tiles}</div></div>`);
+        // Where the list stands before the panel takes any room
+        const fromBottom = messagesFromBottom();
         jQuery('#et-panel [data-et-role~="input-bar"]').after(panel);
         // Grows from nothing (paced by the platform's height transition), so the
         // input bar and the tiles rise together
@@ -5569,7 +5581,7 @@
         panel.css('height', '0px');
         void panel[0].offsetHeight;
         panel.css('height', fullHeight + 'px');
-        followAttachPanel(panel);
+        followAttachPanel(panel, fromBottom);
     }
 
     /** A tile picks its mode; tapping the message list or the input puts the panel away. */
@@ -5588,26 +5600,49 @@
         const panel = jQuery('#et-attach-panel');
         if (!panel.length) return;
         // Shrinks away the same way, then goes; a new "+" meanwhile opens a fresh one
+        const fromBottom = messagesFromBottom();
         panel.removeAttr('id').css('height', '0px');
-        followAttachPanel(panel);
-        setTimeout(() => panel.remove(), 250);
+        followAttachPanel(panel, fromBottom);
+        setTimeout(() => panel.remove(), attachPanelDuration(panel) + 30);
+    }
+
+    /** How far the message list is scrolled up from its end, in px (null without a list). */
+    function messagesFromBottom() {
+        const messagesEl = document.getElementById('et-messages');
+        return messagesEl ? messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight : null;
+    }
+
+    /** How long the platform's CSS takes to raise or lower the panel, in ms. */
+    function attachPanelDuration(panel) {
+        return (parseFloat(getComputedStyle(panel[0]).transitionDuration) || 0) * 1000;
     }
 
     /**
-     * While the panel's height animates, the message list keeps its distance
-     * from the bottom, so its last lines move with the input bar.
+     * While the panel's height changes, the message list keeps the distance
+     * from its end it had before (`fromBottom`, measured before the panel moved),
+     * so its last lines rise and fall with the input bar — animated or not: a
+     * panel without a transition snaps, and is still followed.
+     * Smooth scrolling stays off for the whole animation, or each per-frame
+     * correction would become a smooth scroll restarted every frame.
      */
-    function followAttachPanel(panel) {
+    function followAttachPanel(panel, fromBottom) {
         const messagesEl = document.getElementById('et-messages');
-        if (!messagesEl) return;
-        const fromBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
-        const until = performance.now() + 320;
-        const step = (now) => {
-            messagesEl.style.scrollBehavior = 'auto';
+        if (!messagesEl || fromBottom === null) return;
+        const run = (messagesEl._etFollowRun || 0) + 1;
+        messagesEl._etFollowRun = run;
+        const until = performance.now() + attachPanelDuration(panel) + 80;
+        messagesEl.style.scrollBehavior = 'auto';
+        const follow = () => {
             messagesEl.scrollTop = messagesEl.scrollHeight - messagesEl.clientHeight - fromBottom;
-            messagesEl.style.scrollBehavior = '';
-            if (now < until && panel[0].isConnected) requestAnimationFrame(step);
         };
+        const step = (now) => {
+            // A newer open / close took over
+            if (messagesEl._etFollowRun !== run) return;
+            follow();
+            if (now < until && panel[0].isConnected) requestAnimationFrame(step);
+            else messagesEl.style.scrollBehavior = '';
+        };
+        follow();
         requestAnimationFrame(step);
     }
 

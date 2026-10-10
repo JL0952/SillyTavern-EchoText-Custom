@@ -790,7 +790,7 @@
     border-top: 0.5px solid var(--wx-input-border);
     background: var(--wx-input-surface);
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-    transition: height 0.2s ease-out;
+    transition: height 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-platform="wechat"] .et-attach-panel-list {
