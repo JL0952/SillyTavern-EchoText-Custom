@@ -260,6 +260,8 @@
     window.EchoTextPlatforms.echotext = {
         id: 'echotext',
         name: 'EchoText',
+        // Rich-message features this look supports (lib/features.js)
+        features: ['photo', 'react', 'transfer'],
         templates: {
             message,
             part,

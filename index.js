@@ -66,10 +66,12 @@
     loadEchoTextModule('lib/theme-editor.js', 'EchoTextThemeEditor');
     loadEchoTextModule('lib/context-override.js', 'EchoTextContextOverride');
     loadEchoTextModule('lib/rich-messages.js', 'EchoTextRichMessages');
+    loadEchoTextModule('lib/features.js', 'EchoTextFeatures');
     loadEchoTextModule('lib/chat-view-model.js', 'EchoTextChatViewModel');
     loadEchoTextModule('platforms/echotext/platform.js', 'EchoTextPlatforms');
 
     const RichMessages = window.EchoTextRichMessages;
+    const Features = window.EchoTextFeatures;
     const ChatViewModel = window.EchoTextChatViewModel;
     // The look the message list renders with (one platform for now)
     const Platform = window.EchoTextPlatforms.echotext;
@@ -1911,7 +1913,9 @@
             const sender = msg.is_user
                 ? getUserName()
                 : (msg.charName || memberMap.get(msg.charKey) || getCharacterName());
-            const line = `${sender}: ${getContextMessageText(msg.mes)}`;
+            const text = getContextMessageText(msg.mes);
+            if (text === null) return [];
+            const line = `${sender}: ${text}`;
             const reactions = getUserReactionIds(msg);
             return reactions.length
                 ? [line, `[${getUserName()} reacted ${reactions.join(', ')} to ${sender}'s message]`]
@@ -1995,11 +1999,13 @@
         // Assistant turns get "[CharName]: " prefixed so the model never mistakes
         // another character's line as its own prior output.
         const historyMessages = priorHistory.flatMap(msg => {
+            const text = getContextMessageText(msg.mes);
+            if (text === null) return [];
             if (msg.is_user) {
-                return [{ role: 'user', content: getContextMessageText(msg.mes) }];
+                return [{ role: 'user', content: text }];
             }
             const speaker = msg.charName || charName;
-            return [{ role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` },
+            return [{ role: 'assistant', content: `${speaker}: ${text}` },
                 ...buildCombinedReactionTurns(msg, speaker)];
         });
 
@@ -2008,7 +2014,7 @@
 
         // Latest user message
         if (latestUserMsg) {
-            finalUserParts.push(latestUserMsg.mes || '');
+            finalUserParts.push(getContextMessageText(latestUserMsg.mes) ?? '');
         }
 
         // User persona description
@@ -2312,16 +2318,15 @@
     }
 
     /**
-     * The reply-format rules the renderer depends on: each line is its own bubble
-     * and <photo> tags become photo cards. Built in code rather than kept as an
-     * editable prompt because it must match lib/rich-messages.js exactly.
+     * The reply-format rules the renderer depends on: each line is its own bubble,
+     * plus the rules of each feature the platform supports (lib/features.js).
+     * Built in code rather than kept as an editable prompt because it must match
+     * lib/rich-messages.js exactly.
      */
     function buildMessageFormatPrompt(charName, userName) {
         return [
             `MESSAGES: Put each text on its own line — every line reaches ${userName} as a separate message bubble.`,
-            `PHOTOS: ${charName} can send photos. Write a photo on its own line as <photo>what the photo shows</photo> — a short, concrete description of the picture, written in the same language as the conversation — and ${userName} sees it as an actual picture. Write the description as a neutral caption of what is visible, with no first- or second-person pronouns: refer to people by name (${charName}, ${userName}) instead of I/me/my/you. Send one whenever ${charName} naturally would, such as when asked for a picture, but never use it to describe ${charName}'s own actions. A <photo> from ${userName} is a picture they sent: react to what it shows.`,
-            `REACTIONS: ${charName} can react to ${userName}'s latest message with a tapback by writing <react>name</react> on its own line, where name is one of: heart, haha, wow, sad, fire, like, star, bolt. Use one only now and then, when a quick reaction genuinely fits — most replies need none. A reaction usually comes with text messages, but occasionally it can be the whole reply. A <react> from ${userName} is their tapback on ${charName}'s message just before it — ${charName} may notice it, but it doesn't need an answer of its own.`,
-            `TRANSFERS: ${charName} can send ${userName} money by writing <transfer>amount</transfer> on its own line, with the amount as a plain number. When ${userName} sends ${charName} a <transfer>, ${charName} can accept it with <transfer_accept/> or decline it with <transfer_decline/> on its own line, or leave it pending for now. A <transfer_accept> or <transfer_decline> from ${userName} means they accepted or declined ${charName}'s transfer. Only send or answer transfers when it fits the story.`
+            ...Features.buildFeaturePrompts(getActiveFeatures(), { charName, userName, reactionIds: getReactionIds() }),
         ].join('\n');
     }
 
@@ -2915,13 +2920,25 @@
         ]);
     }
 
+    /** The features the current platform supports (see lib/features.js). */
+    function getActiveFeatures() {
+        return Platform.features;
+    }
+
+    /** Whether the current platform supports a feature, e.g. platformHas('react'). */
+    function platformHas(featureId) {
+        return getActiveFeatures().includes(featureId);
+    }
+
     /**
      * A message's text as sent to the model: reasoning blocks stripped and
      * rich-content tags rewritten to their canonical form, so the model always
-     * sees well-formed examples of its own past usage.
+     * sees well-formed examples of its own past usage — minus the features this
+     * platform doesn't support. null when that leaves nothing: the turn is left out.
      */
     function getContextMessageText(mes) {
-        return RichMessages.normalizeMessageTags(stripThinkingTags(mes || ''));
+        const text = RichMessages.normalizeMessageTags(stripThinkingTags(mes || ''));
+        return Features.filterContextText(text, getActiveFeatures());
     }
 
     /** Combined mode has no format rules, so the user's tapbacks are spelled out in words. */
@@ -2934,6 +2951,7 @@
 
     /** Ids of the user's tapbacks on a character message (none on user messages). */
     function getUserReactionIds(msg) {
+        if (!platformHas('react')) return [];
         return ChatViewModel.getStoredReactions(msg, getReactionIds())
             .filter(reaction => reaction.mine)
             .map(reaction => reaction.id);
@@ -2961,10 +2979,12 @@
      * The saved history is never modified — only the text sent to the API changes.
      *
      * @param {object} msg - a raw history message object
-     * @returns {string} the text to inject into the API context for this turn
+     * @returns {string|null} the text to inject into the API context for this turn,
+     *   or null when the turn is left out (see getContextMessageText)
      */
     function resolveHistoryMessageText(msg) {
         const rawText = getContextMessageText(msg.mes);
+        if (rawText === null) return null;
         if (!msg.is_user && !rawText.trim() && msg.imageAttachment?.status === 'ready') {
             // A silent image turn — give the model a compact, in-character stub so it
             // knows the action was completed.  The exact phrasing is deliberately terse
@@ -2988,7 +3008,7 @@
             // resolveHistoryMessageText also fills in a natural stub for silent image turns
             // so the model never sees an empty assistant response to a photo request.
             const contextText = resolveHistoryMessageText(msg);
-            apiMessages.push({ role: msg.is_user ? 'user' : 'assistant', content: contextText });
+            if (contextText !== null) apiMessages.push({ role: msg.is_user ? 'user' : 'assistant', content: contextText });
             const reactionText = buildUserReactionText(msg);
             if (reactionText) apiMessages.push({ role: 'user', content: reactionText });
         });
@@ -3004,7 +3024,8 @@
 
         let rawPrompt = '';
         history.forEach(msg => {
-            rawPrompt += `${msg.is_user ? getUserName() : getCharacterName()}: ${resolveHistoryMessageText(msg)}\n`;
+            const contextText = resolveHistoryMessageText(msg);
+            if (contextText !== null) rawPrompt += `${msg.is_user ? getUserName() : getCharacterName()}: ${contextText}\n`;
             const reactionText = buildUserReactionText(msg);
             if (reactionText) rawPrompt += `${getUserName()}: ${reactionText}\n`;
         });
@@ -3047,7 +3068,7 @@
             // Apply the same silent-image-turn resolution used in buildApiMessagesFromHistory
             // so group-member context windows also see a closed loop for image turns.
             const contextText = resolveHistoryMessageText(msg);
-            apiMessages.push({ role: msg.is_user ? 'user' : 'assistant', content: contextText });
+            if (contextText !== null) apiMessages.push({ role: msg.is_user ? 'user' : 'assistant', content: contextText });
             const reactionText = buildUserReactionText(msg);
             if (reactionText) apiMessages.push({ role: 'user', content: reactionText });
         });
@@ -3056,7 +3077,8 @@
         const userName = getUserName();
         let rawPrompt = '';
         history.forEach(msg => {
-            rawPrompt += `${msg.is_user ? userName : charName}: ${resolveHistoryMessageText(msg)}\n`;
+            const contextText = resolveHistoryMessageText(msg);
+            if (contextText !== null) rawPrompt += `${msg.is_user ? userName : charName}: ${contextText}\n`;
             const reactionText = buildUserReactionText(msg);
             if (reactionText) rawPrompt += `${userName}: ${reactionText}\n`;
         });
@@ -3709,11 +3731,13 @@
         // Every message is included so the model can see all prior character
         // replies, even those that came after the last user message.
         const historyMessages = allHistory.flatMap(msg => {
+            const text = getContextMessageText(msg.mes);
+            if (text === null) return [];
             if (msg.is_user) {
-                return [{ role: 'user', content: getContextMessageText(msg.mes) }];
+                return [{ role: 'user', content: text }];
             }
             const speaker = msg.charName || charName;
-            return [{ role: 'assistant', content: `${speaker}: ${getContextMessageText(msg.mes)}` },
+            return [{ role: 'assistant', content: `${speaker}: ${text}` },
                 ...buildCombinedReactionTurns(msg, speaker)];
         });
 
