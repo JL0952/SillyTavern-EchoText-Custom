@@ -12116,7 +12116,7 @@ textarea.et-mem-save-snippet-edit::placeholder {
 }
 
 /* Bubbles revealed one at a time when a multi-bubble reply arrives */
-.et-bubble-arrive {
+.et-bubble[data-et-arrive] {
     animation: et-msg-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -12186,11 +12186,6 @@ textarea.et-mem-save-snippet-edit::placeholder {
 
 .et-photo-card[aria-expanded="true"] .et-photo-card-caption {
     display: flex;
-}
-
-/* Editing shows the raw text, line breaks included */
-.et-bubble-text.et-editing {
-    white-space: pre-wrap;
 }
 
 /* Attach ("+") button inside the input pill — shows the compose mode's icon while active */

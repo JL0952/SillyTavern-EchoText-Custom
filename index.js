@@ -67,9 +67,12 @@
     loadEchoTextModule('lib/context-override.js', 'EchoTextContextOverride');
     loadEchoTextModule('lib/rich-messages.js', 'EchoTextRichMessages');
     loadEchoTextModule('lib/chat-view-model.js', 'EchoTextChatViewModel');
+    loadEchoTextModule('platforms/echotext/platform.js', 'EchoTextPlatforms');
 
     const RichMessages = window.EchoTextRichMessages;
     const ChatViewModel = window.EchoTextChatViewModel;
+    // The look the message list renders with (one platform for now)
+    const Platform = window.EchoTextPlatforms.echotext;
 
     // ============================================================
     // THEME PRESETS
@@ -4129,27 +4132,14 @@
         if (!inner.length) return;
 
         if (visible) {
-            if (!inner.find('#et-typing-indicator-msg').length) {
-                const charName = getCharacterName();
-                const avatarHtml = settings.showAvatar !== false
-                    ? buildAvatarHtml(charName, 'et-bubble-avatar', '', true)
-                    : '';
-                const el = jQuery(`
-                    <div class="et-message et-message-char et-message-typing" id="et-typing-indicator-msg">
-                        <div class="et-message-body">
-                            <div class="et-bubble et-bubble-char et-typing-bubble" title="Character is typing">
-                                <div class="et-typing-dots"><span></span><span></span><span></span></div>
-                                ${avatarHtml}
-                            </div>
-                        </div>
-                    </div>
-                `);
+            if (!inner.find('[data-et-role~="typing"]').length) {
+                const el = jQuery(Platform.templates.typing(getMessageRenderContext()).trim());
                 inner.append(el);
                 if (settings.autoScroll) {
                     const messagesEl = document.getElementById('et-messages');
                     if (messagesEl) {
                         messagesEl.scrollTop = messagesEl.scrollHeight;
-                        inner.find('#et-typing-indicator-msg img').on('load', function() {
+                        el.find('img').on('load', function() {
                             if (settings.autoScroll) {
                                 messagesEl.scrollTop = messagesEl.scrollHeight;
                             }
@@ -4158,7 +4148,7 @@
                 }
             }
         } else {
-            inner.find('#et-typing-indicator-msg').remove();
+            inner.find('[data-et-role~="typing"]').remove();
         }
     }
 
@@ -4171,36 +4161,14 @@
         if (!inner.length) return;
 
         if (visible) {
-            if (!inner.find('#et-image-gen-indicator-msg').length) {
-                const charName = getCharacterName();
-                const avatarHtml = settings.showAvatar !== false
-                    ? buildAvatarHtml(charName, 'et-bubble-avatar', '', true)
-                    : '';
-                const el = jQuery(`
-                    <div class="et-message et-message-char et-message-typing" id="et-image-gen-indicator-msg">
-                        <div class="et-message-body">
-                            <div class="et-bubble et-bubble-char et-image-gen-bubble" title="Generating image…">
-                                <div class="et-image-gen-indicator">
-                                    <div class="et-image-gen-ring">
-                                        <svg viewBox="0 0 36 36" class="et-image-gen-svg">
-                                            <circle class="et-image-gen-track" cx="18" cy="18" r="14" fill="none" stroke-width="2.5"/>
-                                            <circle class="et-image-gen-arc" cx="18" cy="18" r="14" fill="none" stroke-width="2.5" stroke-dasharray="22 66" stroke-linecap="round"/>
-                                        </svg>
-                                        <i class="fa-solid fa-camera et-image-gen-icon"></i>
-                                    </div>
-                                    <span class="et-image-gen-label">Generating image…</span>
-                                </div>
-                                ${avatarHtml}
-                            </div>
-                        </div>
-                    </div>
-                `);
+            if (!inner.find('[data-et-role~="image-generating"]').length) {
+                const el = jQuery(Platform.templates.imageGenerating(getMessageRenderContext()).trim());
                 inner.append(el);
                 if (settings.autoScroll) {
                     const messagesEl = document.getElementById('et-messages');
                     if (messagesEl) {
                         messagesEl.scrollTop = messagesEl.scrollHeight;
-                        inner.find('#et-image-gen-indicator-msg img').on('load', function() {
+                        el.find('img').on('load', function() {
                             if (settings.autoScroll) {
                                 messagesEl.scrollTop = messagesEl.scrollHeight;
                             }
@@ -4209,7 +4177,7 @@
                 }
             }
         } else {
-            inner.find('#et-image-gen-indicator-msg').remove();
+            inner.find('[data-et-role~="image-generating"]').remove();
         }
     }
 
@@ -5662,37 +5630,10 @@
     // AI CHARACTER REACTIONS TO USER MESSAGES
     // ============================================================
     // The model reacts by writing <react>name</react> in its reply; the reaction
-    // shows on the user's latest message before that reply (see renderMessages).
+    // shows on the user's latest message before that reply (charReaction in
+    // lib/chat-view-model.js; the platform's message template draws it).
     // Older chats may still carry a stored msg.charReaction from the former
     // keyword-based auto-reaction, which is shown the same way.
-
-    /**
-     * Shows the character's reaction pill under a user message.
-     *
-     * @param {jQuery}      msgEl      - the user message's element
-     * @param {string|null} reactionId - FA_REACTIONS id, or null to clear
-     * @param {boolean}     animate    - play the pop-in (not when only re-rendering)
-     */
-    function renderCharacterReaction(msgEl, reactionId, animate = true) {
-        const container = msgEl.find('[data-et-role~="char-reaction"]');
-        if (!container.length) return;
-
-        container.empty();
-        if (!reactionId) return;
-
-        const reactDef = FA_REACTIONS.find(r => r.id === reactionId);
-        if (!reactDef) return;
-
-        const pill = jQuery(`
-            <div class="et-char-reaction-pill${animate ? ' et-reaction-new' : ''}" style="--react-color:${reactDef.color}" title="${reactDef.label}">
-                <i class="${reactDef.icon} et-char-reaction-icon"></i>
-            </div>
-        `);
-        container.append(pill);
-
-        // Remove the pop-in animation class after it plays so it doesn't replay on DOM mutations
-        if (animate) setTimeout(() => pill.removeClass('et-reaction-new'), 450);
-    }
 
     function updateEmotionIndicator() {
         if (emotionSystem) emotionSystem.updateEmotionIndicator();
@@ -5816,63 +5757,6 @@
         return ChatViewModel.getMessageReactions(msg, getReactionIds());
     }
 
-    /** Stand-in for a reply that is only a reaction (the reaction itself shows on the user's message). */
-    function buildReactionNoteHtml(reactionId) {
-        const def = FA_REACTIONS.find(r => r.id === reactionId);
-        const icon = def ? `<i class="${def.icon}" style="--react-color:${def.color}"></i>` : '';
-        return `<div class="et-reaction-note">${icon}<span>Reacted to your message</span></div>`;
-    }
-
-    /** A photo shows only its frame; tapping it reveals the description inside. */
-    function buildPhotoCardHtml(desc) {
-        const safeDesc = escapeHtml(desc);
-        return `<div class="et-photo-card" role="button" tabindex="0" aria-expanded="false" title="Tap to view" data-et-action="photo-toggle"><div class="et-photo-card-frame"><i class="fa-regular fa-image et-photo-card-icon"></i><div class="et-photo-card-caption" data-et-role="caption"><span>${safeDesc || 'Photo'}</span></div></div></div>`;
-    }
-
-    /** A transfer or transfer-response card, from a view-model part (its status and display amount). */
-    function buildTransferCardHtml(part) {
-        const { status: state, actionable } = part;
-        let icon, label;
-        if (part.type === 'transfer') {
-            icon = { accepted: 'fa-circle-check', declined: 'fa-arrow-rotate-left' }[state] || 'fa-money-bill-transfer';
-            label = { accepted: 'Accepted', declined: 'Declined' }[state] || (actionable ? 'Tap to accept' : 'Pending');
-        } else {
-            const accepted = part.type === 'transfer_accept';
-            icon = accepted ? 'fa-circle-check' : 'fa-arrow-rotate-left';
-            label = accepted ? 'Received' : 'Declined';
-        }
-        const amountText = escapeHtml(part.displayAmount || 'Transfer');
-        // The response tag names the currency explicitly ("$20.00")
-        const actionAttrs = actionable ? ` data-et-action="transfer-respond" data-amount="${escapeHtml(part.displayAmount)}" role="button" tabindex="0"` : '';
-        return `<div class="et-transfer-card et-transfer-${state}${actionable ? ' et-transfer-actionable' : ''}"${actionAttrs}><div class="et-transfer-body"><div class="et-transfer-icon"><i class="fa-solid ${icon}"></i></div><div class="et-transfer-info"><div class="et-transfer-amount">${amountText}</div><div class="et-transfer-status">${label}</div></div></div><div class="et-transfer-footer">Transfer</div></div>`;
-    }
-
-    /** Inner content of one bubble: formatted text, a photo card, or a transfer card. */
-    function buildPartContentHtml(part) {
-        if (part.type === 'photo') return buildPhotoCardHtml(part.desc);
-        if (part.type === 'reaction_note') return buildReactionNoteHtml(part.reaction);
-        if (part.type !== 'text') return buildTransferCardHtml(part);
-        return `<div class="et-bubble-text" data-et-role="text">${formatMessageText(part.text)}</div>`;
-    }
-
-    /** Extra bubble classes for a part: cards get a snug, card-hugging bubble. */
-    function partBubbleClass(part) {
-        if (part.type === 'text') return '';
-        // Transfers and their accept/decline responses share the standalone card style
-        const kind = part.type.startsWith('transfer') ? 'transfer' : part.type === 'reaction_note' ? 'reaction' : part.type;
-        return ` et-bubble-card et-bubble-${kind}`;
-    }
-
-    /**
-     * Bubbles shown before a message's main (footer-bearing) bubble — one per part
-     * except the last, which goes in the main bubble itself.
-     */
-    function buildLeadingPartBubblesHtml(view, sideClass) {
-        return view.parts.slice(0, -1).map((part, j) =>
-            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}" data-et-role="bubble">${buildPartContentHtml(part)}<button class="et-part-dots-btn" data-et-action="part-menu" data-index="${view.index}" data-part="${j}" data-is-user="${view.isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
-        ).join('');
-    }
-
     /** The currency a new transfer defaults to: the last one named in this chat, else the default. */
     function getChatCurrency() {
         const history = getChatHistory();
@@ -5920,35 +5804,20 @@
         const revealNext = () => {
             if (!msgEl[0].isConnected) return;
             const bubble = bubbles.eq(next);
-            const typing = jQuery('<div class="et-bubble et-bubble-char et-typing-bubble"><div class="et-typing-dots"><span></span><span></span><span></span></div></div>');
+            const typing = jQuery(Platform.templates.bubbleTyping());
             bubbles.eq(next - 1).after(typing);
             scrollToEnd();
             const length = bubble.find('[data-et-role~="text"], [data-et-role~="caption"]').text().trim().length;
             setTimeout(() => {
                 typing.remove();
                 if (!msgEl[0].isConnected) return;
-                bubble.show().addClass('et-bubble-arrive');
+                bubble.show().attr('data-et-arrive', '');
                 scrollToEnd();
                 next++;
                 if (next < bubbles.length) setTimeout(revealNext, 220);
             }, Math.min(1800, 450 + length * 35));
         };
         setTimeout(revealNext, 260);
-    }
-
-    function buildImageAttachmentHtml(msg) {
-        const attachment = msg?.imageAttachment;
-        if (!attachment || attachment.type !== 'image') return '';
-
-        if (attachment.status === 'error') {
-            return `<div class="et-image-attachment et-image-attachment-error"><div class="et-image-error"><i class="fa-solid fa-triangle-exclamation"></i><span>${attachment.error || 'Sorry, I could not generate an image right now.'}</span></div></div>`;
-        }
-
-        if (attachment.status !== 'ready' || !attachment.url) {
-            return `<div class="et-image-attachment et-image-attachment-loading"><div class="et-image-gen-indicator"><div class="et-image-gen-ring"><svg viewBox="0 0 36 36" class="et-image-gen-svg"><circle class="et-image-gen-track" cx="18" cy="18" r="14" fill="none" stroke-width="2.5"/><circle class="et-image-gen-arc" cx="18" cy="18" r="14" fill="none" stroke-width="2.5" stroke-dasharray="22 66" stroke-linecap="round"/></svg><i class="fa-solid fa-camera et-image-gen-icon"></i></div><span class="et-image-gen-label">Generating image…</span></div></div>`;
-        }
-
-        return `<div class="et-image-attachment et-image-attachment-ready" data-et-action="image-open"><img src="${attachment.url}" alt="Generated image" class="et-generated-image"><div class="et-image-attachment-meta"><i class="fa-solid fa-expand"></i><span>Tap to enlarge</span></div></div>`;
     }
 
     function openGeneratedImageLightbox(imageUrl, promptText, options) {
@@ -6231,21 +6100,6 @@
         jQuery('#et-messages-inner').off('click.et-actions').on('click.et-actions', '[data-et-action]', onMessageAction);
     }
 
-    const RECEIPT_STATES = {
-        sent: { icon: 'fa-paper-plane', label: 'Sent' },
-        delivered: { icon: 'fa-check', label: 'Delivered' },
-        read: { icon: 'fa-check-double', label: 'Read' },
-        ghosted: { icon: 'fa-eye-slash', label: 'Read, then paused (ghosting)' }
-    };
-
-    /** Read-receipt icon for a user message's view-model receipt ({ state, note }). */
-    function buildReceiptHtml(receipt) {
-        const { DOMPurify } = SillyTavern.libs;
-        const def = RECEIPT_STATES[receipt.state] || RECEIPT_STATES.sent;
-        const tip = DOMPurify.sanitize(receipt.note || def.label, { ALLOWED_TAGS: [] });
-        return `<span class="et-read-receipt et-read-receipt-${receipt.state}" title="${tip}"><i class="fa-solid ${def.icon}"></i></span>`;
-    }
-
     // The view of each message on screen, by index, so refreshMessages() replaces only what changed
     let renderedViews = new Map();
 
@@ -6261,101 +6115,27 @@
         };
     }
 
-    /** What message templates need besides the message's own view. */
+    /** What platform templates get besides a message's own view (see platforms/echotext/platform.js). */
     function getMessageRenderContext() {
-        // Verbosity indicator
-        const charKey = getCharacterKey();
-        const verbosity = charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null;
-        const verbosityLabels = { short: '📏', medium: '📋', long: '📜' };
-        const verbosityTooltips = {
-            short: 'Short: 1–2 texts per reply',
-            medium: 'Medium: 2–4 texts per reply',
-            long: 'Long: 4–7 texts per reply'
-        };
-        const verbosityBadge = verbosity && verbosity !== 'medium'
-            ? `<span class="et-verbosity-badge" title="${verbosityTooltips[verbosity] || 'Verbosity'}">${verbosityLabels[verbosity] || ''}</span>` : '';
-        return { showAvatar: settings.showAvatar !== false, verbosityBadge };
-    }
-
-    /** Markup for one message, from its view-model entry. */
-    function buildMessageHtml(m, { showAvatar, verbosityBadge }) {
         const { DOMPurify } = SillyTavern.libs;
-        const index = m.index;
-        const mainPart = m.parts[m.parts.length - 1];
-        const mainCardClass = partBubbleClass(mainPart);
-        const msgDate = new Date(m.timestamp || Date.now());
-        const time = msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-        const fullDateToolip = msgDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-
-        let html;
-        if (m.isUser) {
-            const safeUserName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
-            html = `
-            <div class="et-message et-message-user${m.groupedWithNext ? ' et-message-grouped' : ''}" data-et-role="message" data-index="${index}">
-                ${buildLeadingPartBubblesHtml(m, 'et-bubble-user')}
-                <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}" data-et-role="bubble main">
-                    ${buildPartContentHtml(mainPart)}
-                    ${m.groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
-                    <div class="et-message-footer">
-                        <span class="et-message-time" title="${fullDateToolip}">${time}</span>
-                        <span class="et-user-name">${safeUserName}</span>
-                        ${buildReceiptHtml(m.receipt)}
-                        <div class="et-bubble-actions">
-                            <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                        </div>
-                    </div>
-                </div>
-                <div class="et-char-reaction-bar" id="et-char-reaction-${index}" data-et-role="char-reaction"></div>
-            </div>`;
-        } else {
-            // Combine mode: each character message carries its own name + avatar
-            const safeCharName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
-            let avatarHtml = '';
-            if (showAvatar) {
-                const member = m.charKey && groupManager ? groupManager.getGroupMemberByKey(m.charKey) : null;
-                avatarHtml = member
-                    ? groupManager.buildAvatarHtmlForChar(member, 'et-bubble-avatar et-bubble-avatar-footer', '', true)
-                    : buildAvatarHtml(m.senderName, 'et-bubble-avatar et-bubble-avatar-footer', '', true);
-            }
-
-            // Swipe navigation — only on the last character message
-            const swipe = m.swipe;
-            const swipeNavHtml = swipe ? `
-                        <div class="et-swipe-nav">
-                            <button class="et-swipe-btn et-swipe-prev" data-et-action="swipe-prev" data-index="${index}" title="Previous version"${swipe.index === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
-                            <span class="et-swipe-counter">${swipe.index + 1} / ${swipe.count}</span>
-                            <button class="et-swipe-btn et-swipe-next${swipe.isLast ? ' et-swipe-regen' : ''}" data-et-action="swipe-next" data-index="${index}" title="${swipe.isLast ? 'Regenerate (new version)' : 'Next version'}"><i class="fa-solid fa-chevron-right"></i></button>
-                        </div>` : '';
-
-            html = `
-            <div class="et-message et-message-char" data-et-role="message" data-index="${index}">
-                <div class="et-message-body">
-                    ${buildLeadingPartBubblesHtml(m, 'et-bubble-char')}
-                    <div class="et-bubble et-bubble-char et-bubble-main${mainCardClass}" data-et-role="bubble main">
-                        ${buildPartContentHtml(mainPart)}
-                        ${buildImageAttachmentHtml(m)}
-                        ${swipeNavHtml}
-                        <div class="et-message-footer">
-                            <div class="et-char-info-pill${showAvatar ? '' : ' et-pill-no-avatar'}">
-                                ${avatarHtml}
-                                <span class="et-footer-name" title="${safeCharName}">${safeCharName}</span>
-                            </div>
-                            <span class="et-message-time" title="${fullDateToolip}">${time}</span>
-                            ${verbosityBadge}
-                            <div class="et-bubble-actions">
-                                <button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>
-                                <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="et-bubble-reactions-bar" id="et-reactions-bar-${index}">
-                        <div class="et-active-reactions" id="et-reactions-${index}" data-et-role="reactions"></div>
-                    </div>
-                </div>
-            </div>`;
-        }
-
-        return html;
+        const charKey = getCharacterKey();
+        return {
+            showAvatar: settings.showAvatar !== false,
+            verbosity: charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null,
+            charName: getCharacterName(),
+            animateReaction: true,
+            escapeHtml,
+            sanitize: text => DOMPurify.sanitize(text, { ALLOWED_TAGS: [] }),
+            formatText: formatMessageText,
+            reaction: id => FA_REACTIONS.find(r => r.id === id) || null,
+            // A combine-mode message shows its own member's avatar
+            avatarHtml: (name, className, charKey = null) => {
+                const member = charKey && groupManager ? groupManager.getGroupMemberByKey(charKey) : null;
+                return member
+                    ? groupManager.buildAvatarHtmlForChar(member, className, '', true)
+                    : buildAvatarHtml(name, className, '', true);
+            },
+        };
     }
 
     /** A rendered message's element, by history index. */
@@ -6363,22 +6143,14 @@
         return jQuery(`#et-messages-inner [data-et-role~="message"][data-index="${msgIndex}"]`);
     }
 
-    /** What a message's markup doesn't carry: its arrival sequence, memory marks and reaction pills. */
-    function decorateMessage(msgEl, m, { animateReaction = true } = {}) {
+    /** What a message's markup doesn't carry: its arrival sequence and memory marks. */
+    function decorateMessage(msgEl, m) {
         if (shouldStaggerReveal(m)) {
             staggerRevealParts(msgEl);
         }
 
         if (m.memoryHighlights.length) {
             try { applyMemoryHighlights(msgEl, m); } catch (e) { /* ignore */ }
-        }
-
-        if (!m.isUser) {
-            renderStoredReactions(msgEl, m.reactions);
-        }
-
-        if (m.charReaction) {
-            renderCharacterReaction(msgEl, m.charReaction, animateReaction);
         }
     }
 
@@ -6404,12 +6176,14 @@
 
             ctx = ctx || getMessageRenderContext();
             const expanded = oldEl.find('[aria-expanded]').map((i, el) => el.getAttribute('aria-expanded')).get();
-            const msgEl = jQuery(buildMessageHtml(m, ctx).trim()).attr('data-et-refreshed', '');
+            // The character's reaction pops in only when it's new
+            const html = Platform.templates.message(m, { ...ctx, animateReaction: m.charReaction !== prev?.charReaction });
+            const msgEl = jQuery(html.trim()).attr('data-et-refreshed', '');
             msgEl.find('[aria-expanded]').each((i, el) => {
                 if (expanded[i]) el.setAttribute('aria-expanded', expanded[i]);
             });
             oldEl.replaceWith(msgEl);
-            decorateMessage(msgEl, m, { animateReaction: m.charReaction !== prev?.charReaction });
+            decorateMessage(msgEl, m);
             if (settings.swipedMessages && isMobileDevice() && m.index === view.lastCharIndex) {
                 bindBubbleTouchSwipe(inner, m.index);
             }
@@ -6434,34 +6208,21 @@
         if (!history || history.length === 0) {
             const char = getCurrentCharacter();
             if (!char) { showNoCharacterMessage(); return; }
-            inner.html('<div class="et-empty-chat"><i class="fa-regular fa-comment-dots"></i><p>Start a conversation!</p></div>');
+            inner.html(Platform.templates.emptyChat());
             return;
         }
 
-        const charName = getCharacterName();
         const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions());
         const ctx = getMessageRenderContext();
         renderedViews = new Map();
         view.messages.forEach((m) => {
-            inner.append(buildMessageHtml(m, ctx));
+            inner.append(Platform.templates.message(m, ctx));
             decorateMessage(inner.children().last(), m);
             renderedViews.set(m.index, { signature: JSON.stringify(m), charReaction: m.charReaction });
         });
 
         if (showTypingIndicator) {
-            const avatarHtml = settings.showAvatar !== false
-                ? buildAvatarHtml(charName, 'et-bubble-avatar et-bubble-avatar-footer', '', true)
-                : '';
-            inner.append(`
-                <div class="et-message et-message-char et-message-typing" id="et-typing-indicator-msg">
-                    <div class="et-message-body">
-                        <div class="et-bubble et-bubble-char et-typing-bubble" title="Character is typing">
-                            ${avatarHtml}
-                            <div class="et-typing-dots"><span></span><span></span><span></span></div>
-                        </div>
-                    </div>
-                </div>
-            `);
+            inner.append(Platform.templates.typing(ctx));
         }
 
         // Bind touch-swipe gesture on the last char bubble (mobile only)
@@ -6631,6 +6392,83 @@
     }
 
     /**
+     * Edits a message in place as one raw text (tags included): the message is
+     * re-rendered as a single text bubble — the platform's own text bubble — and
+     * its text becomes editable. Save writes the text back; Cancel restores the
+     * message.
+     */
+    function startInlineEdit(history, msgIndex) {
+        const msg = history[msgIndex];
+        const oldEl = findMessageElement(msgIndex);
+        if (!msg || !oldEl.length) return;
+
+        // Already editing?
+        if (oldEl.find('[contenteditable="true"]').length) return;
+
+        const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions()).messages[msgIndex];
+        const html = Platform.templates.message({ ...view, parts: [{ type: 'text', text: '' }] },
+            { ...getMessageRenderContext(), animateReaction: false });
+        const msgEl = jQuery(html.trim()).attr('data-et-refreshed', '');
+        oldEl.replaceWith(msgEl);
+        // Not the message's real view any more, so the next refresh restores it
+        renderedViews.delete(msgIndex);
+
+        const bubble = msgEl.find('[data-et-role~="main"]');
+        const textEl = bubble.find('[data-et-role~="text"]');
+
+        // Set the content to raw markdown so it's editable and preserved
+        textEl.text(msg.mes);
+        textEl.attr('contenteditable', 'true').focus();
+
+        // Move cursor to end
+        const range = document.createRange();
+        const sel = window.getSelection();
+        range.selectNodeContents(textEl[0]);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+
+        // Floating save/cancel toolbar below bubble
+        const toolbar = jQuery(`
+            <div class="et-edit-toolbar">
+                <button class="et-edit-save"><i class="fa-solid fa-check"></i> Save</button>
+                <button class="et-edit-cancel"><i class="fa-solid fa-xmark"></i> Cancel</button>
+            </div>
+        `);
+        bubble.after(toolbar);
+
+        const finishEdit = () => {
+            textEl.removeAttr('contenteditable');
+            toolbar.remove();
+        };
+
+        toolbar.find('.et-edit-save').on('click', () => {
+            // Extract plain text from contenteditable
+            const newText = textEl[0].innerText.trim();
+            if (!newText) { finishEdit(); renderMessages(history); return; }
+            history[msgIndex].mes = newText;
+            saveChatHistory(history);
+            finishEdit();
+            renderMessages(history, true);
+        });
+
+        toolbar.find('.et-edit-cancel').on('click', () => {
+            finishEdit();
+            refreshMessages(history);
+        });
+
+        // Also save on Enter (without shift), cancel on Escape
+        textEl.on('keydown.edit', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                toolbar.find('.et-edit-save').trigger('click');
+            } else if (e.key === 'Escape') {
+                toolbar.find('.et-edit-cancel').trigger('click');
+            }
+        });
+    }
+
+    /**
      * @param {number|null} partIndex - the bubble a part-level action targets (Copy /
      *   Delete on one bubble of a multi-bubble message); null for the whole message
      */
@@ -6687,78 +6525,7 @@
 
         if (action === 'edit') {
             closeAllDotMenus();
-            const msgEl = jQuery(`.et-message[data-index="${msgIndex}"]`);
-            const bubble = msgEl.find('.et-bubble-main');
-            let textEl = bubble.find('.et-bubble-text');
-
-            // Already editing?
-            if (textEl.attr('contenteditable') === 'true') return;
-
-            // Multi-bubble / photo messages are edited as one raw text (tags included)
-            // in the main bubble; save or cancel re-renders the bubbles.
-            const isRich = msgEl.find('.et-bubble-part, .et-bubble-card').length > 0;
-            if (isRich) {
-                msgEl.find('.et-bubble-part').hide();
-                bubble.removeClass('et-bubble-card').find('.et-photo-card, .et-transfer-card').hide();
-                if (!textEl.length) textEl = jQuery('<div class="et-bubble-text"></div>').prependTo(bubble);
-            }
-
-            // Make bubble-text contenteditable in-place — no layout shift
-            const originalHtml = textEl.html();
-            const originalMes = msg.mes;
-
-            // Set the content to raw markdown so it's editable and preserved
-            textEl.text(originalMes);
-
-            textEl.attr('contenteditable', 'true').addClass('et-editing').focus();
-
-            // Move cursor to end
-            const range = document.createRange();
-            const sel = window.getSelection();
-            range.selectNodeContents(textEl[0]);
-            range.collapse(false);
-            sel.removeAllRanges();
-            sel.addRange(range);
-
-            // Floating save/cancel toolbar below bubble
-            const toolbar = jQuery(`
-                <div class="et-edit-toolbar">
-                    <button class="et-edit-save"><i class="fa-solid fa-check"></i> Save</button>
-                    <button class="et-edit-cancel"><i class="fa-solid fa-xmark"></i> Cancel</button>
-                </div>
-            `);
-            bubble.after(toolbar);
-
-            const finishEdit = () => {
-                textEl.removeAttr('contenteditable').removeClass('et-editing');
-                toolbar.remove();
-            };
-
-            toolbar.find('.et-edit-save').on('click', () => {
-                // Extract plain text from contenteditable
-                const newText = textEl[0].innerText.trim();
-                if (!newText) { finishEdit(); renderMessages(history); return; }
-                history[msgIndex].mes = newText;
-                saveChatHistory(history);
-                finishEdit();
-                renderMessages(history, true);
-            });
-
-            toolbar.find('.et-edit-cancel').on('click', () => {
-                finishEdit();
-                if (isRich) renderMessages(history, true);
-                else textEl.html(originalHtml);
-            });
-
-            // Also save on Enter (without shift), cancel on Escape
-            textEl.on('keydown.edit', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    toolbar.find('.et-edit-save').trigger('click');
-                } else if (e.key === 'Escape') {
-                    toolbar.find('.et-edit-cancel').trigger('click');
-                }
-            });
+            startInlineEdit(history, msgIndex);
             return;
         }
 
@@ -6945,30 +6712,6 @@
             addReaction(msgIndex, emoji);
             closeAllReactOverlays();
         });
-    }
-
-    /**
-     * Shows the user's tapbacks under a character message.
-     * @param {jQuery} msgEl - the character message's element
-     * @param {Array<{id: string, count: number, mine: boolean}>} reactions - see ChatViewModel.getStoredReactions
-     */
-    function renderStoredReactions(msgEl, reactions) {
-        const container = msgEl.find('[data-et-role~="reactions"]');
-        if (!container.length) return;
-
-        container.empty();
-        for (const reaction of reactions) {
-            const reactDef = FA_REACTIONS.find(r => r.id === reaction.id);
-            if (!reactDef) continue;
-
-            const pill = jQuery(`
-                <button class="et-reaction-pill${reaction.mine ? ' et-reaction-mine' : ''}" data-et-action="reaction-toggle" data-reaction="${reaction.id}" title="${reactDef.label}" style="--react-color:${reactDef.color}">
-                    <i class="${reactDef.icon} et-reaction-icon"></i>
-                    <span class="et-reaction-count">${reaction.count}</span>
-                </button>
-            `);
-            container.append(pill);
-        }
     }
 
     function addReaction(msgIndex, reactionId) {
@@ -7273,7 +7016,7 @@
     }
 
     /**
-     * Apply memory highlight marks to the .et-bubble-text inside `bubbleEl`
+     * Apply memory highlight marks to the first text (data-et-role="text") in `bubbleEl`
      * for the given message's highlight candidates.
      */
     function applyMemoryHighlights(bubbleEl, msg) {
