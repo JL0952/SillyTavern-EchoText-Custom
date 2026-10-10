@@ -389,6 +389,32 @@
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    animation: wx-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* A new message slides up whole, avatar and all (timing from EchoText's own
+   et-msg-rise, without its scale); so does each bubble of a reply arriving one
+   by one. Messages re-rendered in place don't move. */
+[data-platform="wechat"] .wx-message[data-et-refreshed] {
+    animation: none;
+}
+
+[data-platform="wechat"] .wx-row[data-et-arrive] {
+    animation: wx-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes wx-rise {
+    from {
+        opacity: 0;
+        transform: translateY(14px);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    [data-platform="wechat"] .wx-message,
+    [data-platform="wechat"] .wx-row[data-et-arrive] {
+        animation: none;
+    }
 }
 
 [data-platform="wechat"] .wx-time {
@@ -621,6 +647,9 @@
     background: #f99d3b;
     font-size: 14px;
     line-height: 1.4;
+    /* White on orange: macOS's thin antialiasing makes it look too light */
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
 }
 
 [data-platform="wechat"] .wx-pay-handled {
@@ -692,7 +721,7 @@
     margin-top: -1.666667px;
     overflow: hidden;
     font-size: 16px;
-    font-weight: 400;
+    font-weight: 500;
     line-height: 20px;
     white-space: nowrap;
     text-overflow: ellipsis;
@@ -702,6 +731,7 @@
     margin-top: 1.333333px;
     overflow: hidden;
     font-size: 12px;
+    font-weight: 400;
     line-height: 16px;
     white-space: nowrap;
     text-overflow: ellipsis;

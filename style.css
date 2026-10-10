@@ -2,6 +2,15 @@
    EchoText - Glassmorphism Text Messaging Panel for SillyTavern
    ============================================================ */
 
+/* SillyTavern gives every element its theme's text shadow
+   (`* { text-shadow: 0 0 calc(var(--shadowWidth) * 1px) … }`). With a shadow width
+   set (e.g. TauriTavern's own settings), every letter in the panel gets a dark halo,
+   like ink bleeding. Clear it inside EchoText: 0-0-1 beats `*` whatever the load
+   order, and any EchoText rule that draws its own shadow (a class) still wins. */
+:where(#et-portal) :not(html) {
+    text-shadow: none;
+}
+
 /* ============================================================
    AVATAR IMAGE SUPPORT
    ============================================================ */
@@ -12236,6 +12245,11 @@ textarea.et-mem-save-snippet-edit::placeholder {
 .et-attach-btn:disabled {
     opacity: 0.4;
     cursor: default;
+}
+
+/* The platform has nothing to attach */
+.et-attach-btn[hidden] {
+    display: none !important;
 }
 
 .et-input-wrap.et-input-wrap-compose {

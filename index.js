@@ -4848,7 +4848,7 @@
             <div class="et-input-bar" data-et-role="input-bar">
                 <div class="et-input-wrap">
                     <button class="et-attach-btn" id="et-attach-btn" type="button" title="Photo or transfer"${hasChar ? '' : ' disabled'}><i class="fa-solid fa-plus"></i></button>
-                    <textarea class="et-input" id="et-input" placeholder="${inCombine ? `Message all: ${charName}...` : (hasChar ? `Text ${charName}...` : 'Text a character...')}" rows="1"${hasChar ? '' : ' disabled'}></textarea>
+                    <textarea class="et-input" id="et-input" enterkeyhint="send" placeholder="${inCombine ? `Message all: ${charName}...` : (hasChar ? `Text ${charName}...` : 'Text a character...')}" rows="1"${hasChar ? '' : ' disabled'}></textarea>
                 </div>
                 <button class="et-send-btn" id="et-send-btn" title="Send message"${hasChar ? '' : ' disabled'}>
                     <i class="fa-solid fa-paper-plane"></i>
@@ -6347,7 +6347,9 @@
         }
 
         const modes = Features.getComposerModes(platform.features);
-        jQuery('#et-attach-btn').toggle(Object.keys(modes).length > 0);
+        // An attribute, not jQuery's show/hide: show() run while the platform's CSS
+        // hides "+" (WeChat, while typing) would pin it visible with an inline style
+        jQuery('#et-attach-btn').prop('hidden', Object.keys(modes).length === 0);
         if (composeMode && !modes[composeMode]) setComposeMode(null);
         if (!platform.composerPanel) closeAttachPanel();
         populatePlatformSelects();

@@ -523,12 +523,12 @@
             await sleep(0);
             r.renderMessages(history);
             const link = document.getElementById('et-platform-css')?.getAttribute('href');
-            const attachHidden = document.getElementById('et-attach-btn').style.display === 'none';
+            const attachHidden = getComputedStyle(document.getElementById('et-attach-btn')).display === 'none';
             settings.defaultPlatform = 'echotext';
             await sleep(0);
             r.renderMessages(history);
             const linkGone = !document.getElementById('et-platform-css');
-            const attachBack = document.getElementById('et-attach-btn').style.display !== 'none';
+            const attachBack = getComputedStyle(document.getElementById('et-attach-btn')).display !== 'none';
             delete window.EchoTextPlatforms['css-test'];
             chrome.remove();
 

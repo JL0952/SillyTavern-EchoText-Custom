@@ -85,6 +85,18 @@ window.runPanelTest = async function () {
     res.inputCloses = !panelEl();
     document.getElementById('et-input').blur();
 
+    // 5b. "+" and 发送 share a slot: one at a time, even after a render while typing
+    //     (jQuery's show() there once pinned "+" visible with an inline style)
+    const input = document.getElementById('et-input');
+    const shown = id => getComputedStyle(document.getElementById(id)).display !== 'none';
+    input.value = '你好';
+    r.renderMessages(history);
+    const typing = { plus: shown('et-attach-btn'), send: shown('et-send-btn') };
+    input.value = '';
+    r.renderMessages(history);
+    const empty = { plus: shown('et-attach-btn'), send: shown('et-send-btn') };
+    res.plusOrSend = !typing.plus && typing.send && empty.plus && !empty.send;
+
     // 6. switching to a platform without a panel closes it; its "+" opens the popup menu
     plus(); await sleep(50);
     env.settings.defaultPlatform = 'echotext';
