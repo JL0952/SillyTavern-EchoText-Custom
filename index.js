@@ -76,7 +76,7 @@
     // Platform packs (platforms/<id>/platform.js), in menu order. Their scripts are
     // small and all load now; a pack's stylesheet loads only while it's in use.
     // EchoText's own look must load, the others are optional.
-    const PLATFORM_IDS = ['echotext', 'test-noreact'];
+    const PLATFORM_IDS = ['echotext', 'wechat', 'test-noreact'];
     for (const id of PLATFORM_IDS) {
         try {
             if (!window.EchoTextPlatforms?.[id]) runEchoTextScript(`platforms/${id}/platform.js`);
@@ -1449,6 +1449,12 @@
         } else {
             document.documentElement.classList.remove('et-bg-light');
         }
+        jQuery('#et-panel').attr('data-et-scheme', getColorScheme());
+    }
+
+    /** 'light' when the panel uses its light glass (a light SillyTavern background), else 'dark'. */
+    function getColorScheme() {
+        return document.documentElement.classList.contains('et-bg-light') ? 'light' : 'dark';
     }
 
     function applyAppearanceSettings() {
@@ -4571,6 +4577,28 @@
         return `hsl(${Math.abs(hash) % 360}, 65%, 60%)`;
     }
 
+    // SillyTavern keeps the user's persona avatar in its personas module rather
+    // than in getContext(); it's imported once at startup, and until then (or if
+    // that fails) user avatars fall back to initials
+    let personasModule = null;
+
+    function loadPersonasModule() {
+        import(new URL('scripts/personas.js', document.baseURI).href)
+            .then(module => { personasModule = module; })
+            .catch(err => warn('Could not read the persona avatar:', err));
+    }
+
+    /** The user's persona avatar URL, or null. */
+    function getUserAvatarUrl() {
+        const file = personasModule?.user_avatar;
+        if (!file) return null;
+        try {
+            return SillyTavern.getContext().getThumbnailUrl('persona', file);
+        } catch (e) {
+            return null;
+        }
+    }
+
     /**
      * Get the character's avatar image URL from SillyTavern.
      * Returns null if no image is available.
@@ -4758,7 +4786,7 @@
             <div class="et-resize-handle" data-corner="sw"></div>
             <div class="et-resize-handle" data-corner="se"></div>
 
-            <div class="et-panel-header${noCharClass}" id="et-panel-drag-handle">
+            <div class="et-panel-header${noCharClass}" id="et-panel-drag-handle" data-et-role="header">
                 <div class="et-header-left">
                     ${buildAvatarHtml(charName, '', 'et-char-avatar-wrap')}
                     <span class="et-panel-echotext-title">EchoText</span>
@@ -4811,12 +4839,12 @@
             </div>
 
             <div class="et-panel-content">
-                <div class="et-messages" id="et-messages">
-                    <div class="et-messages-inner" id="et-messages-inner"></div>
+                <div class="et-messages" id="et-messages" data-et-role="messages">
+                    <div class="et-messages-inner" id="et-messages-inner" data-et-role="message-list"></div>
                 </div>
             </div>
 
-            <div class="et-input-bar">
+            <div class="et-input-bar" data-et-role="input-bar">
                 <div class="et-input-wrap">
                     <button class="et-attach-btn" id="et-attach-btn" type="button" title="Photo or transfer"${hasChar ? '' : ' disabled'}><i class="fa-solid fa-plus"></i></button>
                     <textarea class="et-input" id="et-input" placeholder="${inCombine ? `Message all: ${charName}...` : (hasChar ? `Text ${charName}...` : 'Text a character...')}" rows="1"${hasChar ? '' : ' disabled'}></textarea>
@@ -6165,7 +6193,7 @@
      */
     function syncPlatformChrome() {
         const platform = getActivePlatform();
-        jQuery('#et-panel').attr('data-platform', platform.id);
+        jQuery('#et-panel').attr({ 'data-platform': platform.id, 'data-et-scheme': getColorScheme() });
 
         const href = platform.stylesheet
             ? `${BASE_URL}/platforms/${platform.id}/${platform.stylesheet}${VERSION_QUERY}`
@@ -6260,12 +6288,13 @@
             sanitize: text => DOMPurify.sanitize(text, { ALLOWED_TAGS: [] }),
             formatText: formatMessageText,
             reaction: id => FA_REACTIONS.find(r => r.id === id) || null,
-            // A combine-mode message shows its own member's avatar
-            avatarHtml: (name, className, charKey = null) => {
-                const member = charKey && groupManager ? groupManager.getGroupMemberByKey(charKey) : null;
-                return member
-                    ? groupManager.buildAvatarHtmlForChar(member, className, '', true)
-                    : buildAvatarHtml(name, className, '', true);
+            groupChat: isCombinedGroupMode(),
+            // A message sender's avatar as data, for templates that draw their own
+            avatar: (m) => {
+                const name = m.senderName || '';
+                const member = !m.isUser && m.charKey && groupManager ? groupManager.getGroupMemberByKey(m.charKey) : null;
+                const url = m.isUser ? getUserAvatarUrl() : member ? getAvatarUrlForCharacter(member) : getCharAvatarUrl();
+                return { url, initial: name.charAt(0).toUpperCase(), color: _pickerAvatarBg(name) };
             },
         };
     }
@@ -6307,20 +6336,98 @@
             if (!oldEl.length) continue;
 
             ctx = ctx || getMessageRenderContext();
-            const expanded = oldEl.find('[aria-expanded]').map((i, el) => el.getAttribute('aria-expanded')).get();
-            // The character's reaction pops in only when it's new
-            const html = getActivePlatform().templates.message(m, { ...ctx, animateReaction: m.charReaction !== prev?.charReaction });
-            const msgEl = jQuery(html.trim()).attr('data-et-refreshed', '');
-            msgEl.find('[aria-expanded]').each((i, el) => {
-                if (expanded[i]) el.setAttribute('aria-expanded', expanded[i]);
-            });
-            oldEl.replaceWith(msgEl);
-            decorateMessage(msgEl, m);
+            replaceMessageElement(oldEl, m, prev, ctx);
             if (settings.swipedMessages && isMobileDevice() && m.index === view.lastCharIndex) {
                 bindBubbleTouchSwipe(inner, m.index);
             }
             renderedViews.set(m.index, { signature, charReaction: m.charReaction });
         }
+    }
+
+    /** Swaps a rendered message for its new view: no entrance animation, open photos stay open. */
+    function replaceMessageElement(oldEl, m, prev, ctx) {
+        const expanded = oldEl.find('[aria-expanded]').map((i, el) => el.getAttribute('aria-expanded')).get();
+        // The character's reaction pops in only when it's new
+        const html = getActivePlatform().templates.message(m, { ...ctx, animateReaction: m.charReaction !== prev?.charReaction });
+        const msgEl = jQuery(html.trim()).attr('data-et-refreshed', '');
+        msgEl.find('[aria-expanded]').each((i, el) => {
+            if (expanded[i]) el.setAttribute('aria-expanded', expanded[i]);
+        });
+        oldEl.replaceWith(msgEl);
+        decorateMessage(msgEl, m);
+        return msgEl;
+    }
+
+    // What the rendered list was drawn with besides each message's view; when it
+    // changes (another chat, platform or avatar), renderMessages() starts over
+    let renderedFrame = null;
+
+    function getRenderFrame(platform, ctx) {
+        return JSON.stringify([platform.id, platform.features, getCharacterKey(), ctx.charName, ctx.showAvatar, ctx.verbosity, ctx.groupChat,
+            getUserAvatarUrl(), getCharAvatarUrl(), settings.memoryHighlightStyle]);
+    }
+
+    /**
+     * Brings the rendered list up to date with `view` without clearing it: messages
+     * whose view is unchanged stay as they are, changed ones are replaced in place,
+     * new ones are added where they belong and gone ones removed. Clearing the list
+     * would reset its scroll position and replay every message's entrance.
+     * @returns {boolean} false when the list holds no messages or something else
+     *   (empty-chat placeholder, character picker…) and needs a full render instead
+     */
+    function updateMessageList(inner, view, ctx) {
+        const children = inner.children();
+        const messageEls = children.filter('[data-et-role~="message"]');
+        const onlyMessages = children.toArray().every(el =>
+            /(^|\s)(message|typing|image-generating)(\s|$)/.test(el.getAttribute('data-et-role') || ''));
+        if (!onlyMessages || !messageEls.length) return false;
+
+        const platform = getActivePlatform();
+        const existing = new Map(messageEls.toArray().map(el => [el.getAttribute('data-index'), jQuery(el)]));
+        const rebuilt = new Set();
+        let prevEl = null;
+        for (const m of view.messages) {
+            const signature = JSON.stringify(m);
+            const prev = renderedViews.get(m.index);
+            let msgEl = existing.get(String(m.index));
+            existing.delete(String(m.index));
+            if (msgEl && prev?.signature === signature) {
+                // unchanged
+            } else if (msgEl) {
+                msgEl = replaceMessageElement(msgEl, m, prev, ctx);
+                rebuilt.add(m.index);
+            } else {
+                msgEl = jQuery(platform.templates.message(m, ctx).trim());
+                if (prevEl) prevEl.after(msgEl);
+                else inner.prepend(msgEl);
+                decorateMessage(msgEl, m);
+                rebuilt.add(m.index);
+                // Re-scroll when a new message's images load
+                msgEl.find('img').on('load', scrollMessagesToEnd);
+            }
+            renderedViews.set(m.index, { signature, charReaction: m.charReaction });
+            prevEl = msgEl;
+        }
+        for (const [index, el] of existing) {
+            el.remove();
+            renderedViews.delete(Number(index));
+        }
+
+        // Indicators as a full render leaves them: the typing indicator last, if on
+        children.filter('[data-et-role~="image-generating"]').remove();
+        const typing = inner.children('[data-et-role~="typing"]');
+        if (!showTypingIndicator) typing.remove();
+        else if (!typing.length) inner.append(platform.templates.typing(ctx));
+
+        if (settings.swipedMessages && isMobileDevice() && rebuilt.has(view.lastCharIndex)) {
+            bindBubbleTouchSwipe(inner, view.lastCharIndex);
+        }
+        return true;
+    }
+
+    function scrollMessagesToEnd() {
+        const messagesEl = document.getElementById('et-messages');
+        if (settings.autoScroll && messagesEl) messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
     // Track which delete button is pending 2nd click
@@ -6335,10 +6442,11 @@
         const savedScrollTop = (preserveScroll && messagesEl) ? messagesEl.scrollTop : null;
 
         syncPlatformChrome();
-        inner.empty();
-        renderedViews = new Map();
 
         if (!history || history.length === 0) {
+            inner.empty();
+            renderedViews = new Map();
+            renderedFrame = null;
             const char = getCurrentCharacter();
             if (!char) { showNoCharacterMessage(); return; }
             inner.html(getActivePlatform().templates.emptyChat());
@@ -6348,7 +6456,19 @@
         const platform = getActivePlatform();
         const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions());
         const ctx = getMessageRenderContext();
+        const frame = getRenderFrame(platform, ctx);
+
+        // Same chat drawn the same way (a message sent or received, an edit):
+        // update in place, so the list keeps its scroll position
+        if (frame === renderedFrame && updateMessageList(inner, view, ctx)) {
+            if (preserveScroll && messagesEl && savedScrollTop !== null) messagesEl.scrollTop = savedScrollTop;
+            else scrollMessagesToEnd();
+            return;
+        }
+
+        inner.empty();
         renderedViews = new Map();
+        renderedFrame = frame;
         view.messages.forEach((m) => {
             inner.append(platform.templates.message(m, ctx));
             decorateMessage(inner.children().last(), m);
@@ -6369,16 +6489,15 @@
             messagesEl.scrollTop = savedScrollTop;
         } else if (settings.autoScroll) {
             if (messagesEl) {
-                // Initial immediate scroll for text/avatars
+                // A new list jumps straight to its end; smooth scrolling would
+                // glide there from the top
+                messagesEl.style.scrollBehavior = 'auto';
                 messagesEl.scrollTop = messagesEl.scrollHeight;
+                messagesEl.style.scrollBehavior = '';
 
                 // Re-scroll when images (specifically generated images) finish loading
                 // so they don't break the auto-scroll flow by pushing text up.
-                inner.find('img').on('load', function () {
-                    if (settings.autoScroll) {
-                        messagesEl.scrollTop = messagesEl.scrollHeight;
-                    }
-                });
+                inner.find('img').on('load', scrollMessagesToEnd);
             }
         }
     }
@@ -7781,6 +7900,7 @@
         FA_REACTIONS = emotionSystem.FA_REACTIONS;
 
         loadSettings();
+        loadPersonasModule();
 
         // Inject mobile-specific stylesheet when running on a touch device.
         // Done AFTER loadSettings() so BASE_URL is guaranteed to be resolved.

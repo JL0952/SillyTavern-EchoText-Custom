@@ -12101,7 +12101,7 @@ textarea.et-mem-save-snippet-edit::placeholder {
     margin-bottom: calc(var(--et-paragraph-spacing, 10px) * -0.4);
 }
 
-.et-message-grouped .et-bubble-main > .et-message-footer {
+.et-message-grouped > .et-message-footer {
     display: none;
 }
 
@@ -12319,7 +12319,7 @@ textarea.et-mem-save-snippet-edit::placeholder {
 }
 
 /* Cards (photos, transfers) stand on their own, as in messaging apps: their bubble
-   drops the glass surface and the footer (name, time, actions) sits under the card */
+   drops the glass surface */
 .et-message .et-bubble.et-bubble-card,
 .et-message .et-bubble.et-bubble-card:hover {
     background: transparent;
@@ -12330,10 +12330,20 @@ textarea.et-mem-save-snippet-edit::placeholder {
     padding: 0;
 }
 
-.et-message .et-bubble-card .et-message-footer {
+/* Name, time and actions sit under a message's last bubble, outside it */
+.et-message .et-message-footer {
     border-top: none;
-    margin-top: 4px;
+    margin-top: 0;
     padding: 2px 4px 0;
+}
+
+.et-message .et-message-footer .et-message-time,
+.et-message .et-message-footer .et-user-name {
+    color: var(--et-text-muted);
+}
+
+.et-message .et-message-footer .et-footer-name {
+    color: var(--et-theme-color, #4da6ff);
 }
 
 /* Per-bubble menu on the leading bubbles of a multi-bubble message (Copy /

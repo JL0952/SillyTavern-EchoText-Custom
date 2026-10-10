@@ -1,0 +1,455 @@
+/*
+ * WeChat for EchoText — ported from soloshow-labs/chat-screenshot-generator
+ * (src/components/chat/ChatCanvas.module.css and RichMessage.module.css).
+ * Every rule hangs under [data-platform="wechat"]. Dark by default; light when
+ * the panel sits on a light background (data-et-scheme="light").
+ */
+
+[data-platform="wechat"] {
+    --wx-bg: #111111;
+    --wx-input-surface: #1e1e1e;
+    --wx-text: #f2f2f2;
+    --wx-muted: #999999;
+    --wx-time: #8c8c8c;
+    --wx-link: #7d90b8;
+    --wx-border: #292929;
+    --wx-bubble-in: #2c2c2c;
+    --wx-bubble-out: #26bd69;
+}
+
+[data-platform="wechat"][data-et-scheme="light"] {
+    --wx-bg: #ededed;
+    --wx-input-surface: #f6f6f6;
+    --wx-text: #111111;
+    --wx-muted: #929292;
+    --wx-time: #b2b2b2;
+    --wx-link: #576b95;
+    --wx-border: #d5d5d5;
+    --wx-bubble-in: #ffffff;
+    --wx-bubble-out: #95ec69;
+}
+
+/* ── Panel surfaces ─────────────────────────────────────────── */
+
+[data-platform="wechat"] [data-et-role~="header"] {
+    background: var(--wx-bg);
+    border-bottom: 1px solid var(--wx-border);
+}
+
+[data-platform="wechat"] [data-et-role~="messages"] {
+    padding: 4px 0 24px;
+    background: var(--wx-bg);
+}
+
+[data-platform="wechat"] [data-et-role~="message-list"] {
+    gap: 0;
+}
+
+[data-platform="wechat"] [data-et-role~="input-bar"] {
+    background: var(--wx-input-surface);
+    border-top: 1px solid var(--wx-border);
+}
+
+/* ── Messages ───────────────────────────────────────────────── */
+
+[data-platform="wechat"] .wx-message {
+    display: flow-root;
+    color: var(--wx-text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+[data-platform="wechat"] .wx-time {
+    margin: 25px 12px 20px;
+    color: var(--wx-time);
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+[data-platform="wechat"] .wx-system {
+    margin: 22px 24px;
+    color: var(--wx-time);
+    font-size: 13px;
+    line-height: 18px;
+    text-align: center;
+}
+
+/* Each message is its own box, so margins can't collapse between messages:
+   rows keep only a top margin (17px, as in the reference) */
+[data-platform="wechat"] .wx-row {
+    display: flex;
+    gap: 12px;
+    padding: 0 12px;
+    margin: 17px 0 0;
+    align-items: flex-start;
+}
+
+[data-platform="wechat"] .wx-time + .wx-row {
+    margin-top: 0;
+}
+
+[data-platform="wechat"] .wx-row-right {
+    flex-direction: row-reverse;
+}
+
+[data-platform="wechat"] .wx-avatar {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: 0 0 41px;
+    width: 41px;
+    height: 41px;
+    overflow: hidden;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 17px;
+    font-weight: 600;
+}
+
+[data-platform="wechat"] .wx-avatar img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+[data-platform="wechat"] .wx-bubble-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    max-width: 74%;
+    min-width: 0;
+}
+
+[data-platform="wechat"] .wx-row-right .wx-bubble-wrap {
+    align-items: flex-end;
+}
+
+[data-platform="wechat"] .wx-sender {
+    min-height: 17px;
+    margin: -2px 0 2px 1px;
+    color: var(--wx-muted);
+    font-size: 12px;
+    line-height: 17px;
+}
+
+[data-platform="wechat"] .wx-bubble {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 5px;
+    font-size: 17px;
+    font-weight: 400;
+    line-height: 21px;
+    overflow-wrap: anywhere;
+}
+
+[data-platform="wechat"] .wx-bubble-left {
+    color: var(--wx-text);
+    background: var(--wx-bubble-in);
+}
+
+[data-platform="wechat"] .wx-bubble-right {
+    color: #111111;
+    background: var(--wx-bubble-out);
+}
+
+[data-platform="wechat"] .wx-bubble-left::before,
+[data-platform="wechat"] .wx-bubble-right::before {
+    content: "";
+    position: absolute;
+    top: 12px;
+    width: 8px;
+    height: 11px;
+    background: inherit;
+}
+
+[data-platform="wechat"] .wx-bubble-left::before {
+    left: -5px;
+    clip-path: polygon(100% 0, 100% 100%, 0 50%);
+}
+
+[data-platform="wechat"] .wx-bubble-right::before {
+    right: -5px;
+    clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+
+[data-platform="wechat"] .wx-text p {
+    margin: 0;
+}
+
+/* A reply that is only an image has no text bubble (editing fills the text, so it shows again) */
+[data-platform="wechat"] .wx-bubble-wrap:has(.wx-image, .wx-placeholder) > .wx-bubble:has(> .wx-text > p:only-child:empty) {
+    display: none;
+}
+
+[data-platform="wechat"] .wx-bubble-wrap:has(> .wx-bubble:first-child:has(> .wx-text > p:only-child:empty)) > .wx-image,
+[data-platform="wechat"] .wx-bubble-wrap:has(> .wx-bubble:first-child:has(> .wx-text > p:only-child:empty)) > .wx-placeholder {
+    margin-top: 0;
+}
+
+[data-platform="wechat"] .wx-text[contenteditable="true"] {
+    min-height: 21px;
+    white-space: pre-wrap;
+    outline: 1px solid var(--wx-link);
+    outline-offset: 3px;
+    border-radius: 2px;
+    cursor: text;
+}
+
+/* A photo: a 4:3 picture frame (as an image message, 220px wide at most).
+   Tapped, the description fills the frame and a long one scrolls inside it */
+[data-platform="wechat"] .wx-photo {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 220px;
+    max-width: 100%;
+    aspect-ratio: 4 / 3;
+    overflow: hidden;
+    border-radius: 5px;
+    color: var(--wx-muted);
+    background: var(--wx-bubble-in);
+    cursor: pointer;
+}
+
+[data-platform="wechat"] .wx-photo svg {
+    width: 40px;
+    height: 40px;
+}
+
+[data-platform="wechat"] .wx-photo-caption {
+    display: none;
+    position: absolute;
+    inset: 0;
+    flex-direction: column;
+    padding: 10px 12px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    color: var(--wx-text);
+    font-size: 15px;
+    line-height: 20px;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+/* margin:auto centres a short description, yet a long one still scrolls from its first line */
+[data-platform="wechat"] .wx-photo-caption > span {
+    margin: auto 0;
+}
+
+[data-platform="wechat"] .wx-photo[aria-expanded="true"] svg {
+    display: none;
+}
+
+[data-platform="wechat"] .wx-photo[aria-expanded="true"] .wx-photo-caption {
+    display: flex;
+}
+
+/* A generated image, or its placeholder */
+[data-platform="wechat"] .wx-image {
+    display: block;
+    max-width: 220px;
+    max-height: 300px;
+    margin-top: 6px;
+    overflow: hidden;
+    border-radius: 5px;
+    cursor: zoom-in;
+}
+
+[data-platform="wechat"] .wx-image img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+[data-platform="wechat"] .wx-placeholder {
+    min-width: 120px;
+    margin-top: 6px;
+    padding: 18px 14px;
+    box-sizing: border-box;
+    border-radius: 5px;
+    color: var(--wx-muted);
+    background: var(--wx-bubble-in);
+    font-size: 13px;
+    text-align: center;
+}
+
+[data-platform="wechat"] .wx-bubble-wrap > .wx-placeholder:first-child {
+    margin-top: 0;
+}
+
+/* ── Transfer card ──────────────────────────────────────────── */
+
+[data-platform="wechat"] .wx-pay {
+    position: relative;
+    display: block;
+    width: 233.333333px;
+    max-width: 100%;
+    box-sizing: border-box;
+    border-radius: 5px;
+    color: #fff;
+    background: #f99d3b;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+[data-platform="wechat"] .wx-pay-handled {
+    background: #fde1c2;
+}
+
+[data-platform="wechat"] .wx-pay-terminal {
+    background: #fde1c4;
+}
+
+[data-platform="wechat"] .wx-pay[data-et-action] {
+    cursor: pointer;
+}
+
+[data-platform="wechat"] .wx-pay-tail {
+    position: absolute;
+    top: 16.666667px;
+    left: -4px;
+    width: 8px;
+    height: 8px;
+    background: inherit;
+    transform: rotate(45deg);
+    border-bottom-left-radius: 1.333333px;
+    pointer-events: none;
+}
+
+[data-platform="wechat"] .wx-pay[data-side="right"] > .wx-pay-tail {
+    right: -3.333333px;
+    left: auto;
+    border-bottom-left-radius: 0;
+    border-top-right-radius: 1.333333px;
+}
+
+[data-platform="wechat"] .wx-pay-body {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 64px;
+    padding: 0 12.666667px;
+    box-sizing: border-box;
+    border-radius: 5px 5px 0 0;
+    background: inherit;
+}
+
+[data-platform="wechat"] .wx-pay-glyph {
+    display: block;
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    background-size: cover;
+}
+
+[data-platform="wechat"] .wx-pay-glyph-pending {
+    background-image: url("assets/transfer-pending.png");
+}
+
+[data-platform="wechat"] .wx-pay-glyph-received {
+    background-image: url("assets/transfer-received.png");
+}
+
+[data-platform="wechat"] .wx-pay-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+}
+
+[data-platform="wechat"] .wx-pay-title {
+    margin-top: -1.666667px;
+    overflow: hidden;
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 20px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+[data-platform="wechat"] .wx-pay-note {
+    margin-top: 1.333333px;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+[data-platform="wechat"] .wx-pay-footer {
+    display: flex;
+    align-items: center;
+    height: 23.666667px;
+    padding: 0 12.666667px;
+    box-sizing: border-box;
+    border-radius: 0 0 5px 5px;
+    color: #faecda;
+    background: inherit;
+    font-size: 12px;
+    line-height: 16px;
+}
+
+[data-platform="wechat"] .wx-pay-handled .wx-pay-footer {
+    color: #fff;
+}
+
+/* ── EchoText controls (WeChat has none; kept quiet) ────────── */
+
+/* More options: shows on hover, faintly on touch screens */
+[data-platform="wechat"] .wx-more {
+    flex: 0 0 auto;
+    align-self: center;
+    padding: 4px;
+    border: 0;
+    background: none;
+    color: var(--wx-muted);
+    font-size: 16px;
+    line-height: 1;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 0.15s;
+}
+
+[data-platform="wechat"] .wx-row:hover .wx-more,
+[data-platform="wechat"] .wx-more:focus-visible {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    [data-platform="wechat"] .wx-more {
+        opacity: 0.45;
+    }
+}
+
+/* Versions of the last reply: under its bubbles, aligned with them */
+[data-platform="wechat"] .wx-swipe {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 4px 0 0 65px;
+    color: var(--wx-muted);
+    font-size: 12px;
+}
+
+[data-platform="wechat"] .wx-swipe button {
+    padding: 2px 6px;
+    border: 0;
+    background: none;
+    color: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+[data-platform="wechat"] .wx-swipe button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}

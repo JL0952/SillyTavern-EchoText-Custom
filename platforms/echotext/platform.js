@@ -14,7 +14,8 @@
      *   sanitize(text)        plain text with any tags stripped
      *   formatText(text)      message text as safe HTML (markdown, emoticons)
      *   reaction(id)          { icon, color, label }, or null for an unknown id
-     *   avatarHtml(name, className, charKey)   EchoText's avatar markup
+     *   avatar(m)           a sender's avatar as data: { url (or null), initial, color }
+     *   groupChat             a group chat in combine mode (show who sent what)
      *
      * No event code: clickable elements carry data-et-action, and the elements
      * core code looks up carry data-et-role (see docs/platform-plan.md).
@@ -154,24 +155,21 @@
                 <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}" data-et-role="bubble main">
                     ${part(mainPart, ctx)}
                     ${m.groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
-                    <div class="et-message-footer">
-                        <span class="et-message-time" title="${fullDateToolip}">${time}</span>
-                        <span class="et-user-name">${safeUserName}</span>
-                        ${receipt(m.receipt, ctx)}
-                        <div class="et-bubble-actions">
-                            <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                        </div>
+                </div>
+                <div class="et-message-footer">
+                    <span class="et-message-time" title="${fullDateToolip}">${time}</span>
+                    <span class="et-user-name">${safeUserName}</span>
+                    ${receipt(m.receipt, ctx)}
+                    <div class="et-bubble-actions">
+                        <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
                     </div>
                 </div>
                 <div class="et-char-reaction-bar" id="et-char-reaction-${index}" data-et-role="char-reaction">${m.charReaction ? charReaction(m.charReaction, ctx) : ''}</div>
             </div>`;
         }
 
-        // Combine mode: each character message carries its own name + avatar
+        // Combine mode: each character message carries its own name
         const safeCharName = ctx.sanitize(m.senderName);
-        const avatarHtml = ctx.showAvatar
-            ? ctx.avatarHtml(m.senderName, 'et-bubble-avatar et-bubble-avatar-footer', m.charKey)
-            : '';
 
         // Swipe navigation — only on the last character message
         const swipe = m.swipe;
@@ -190,17 +188,14 @@
                         ${part(mainPart, ctx)}
                         ${imageAttachment(m.imageAttachment)}
                         ${swipeNavHtml}
-                        <div class="et-message-footer">
-                            <div class="et-char-info-pill${ctx.showAvatar ? '' : ' et-pill-no-avatar'}">
-                                ${avatarHtml}
-                                <span class="et-footer-name" title="${safeCharName}">${safeCharName}</span>
-                            </div>
-                            <span class="et-message-time" title="${fullDateToolip}">${time}</span>
-                            ${verbosityBadge(ctx.verbosity)}
-                            <div class="et-bubble-actions">
-                                ${ctx.has('react') ? `<button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>` : ''}
-                                <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                            </div>
+                    </div>
+                    <div class="et-message-footer">
+                        <span class="et-footer-name" title="${safeCharName}">${safeCharName}</span>
+                        <span class="et-message-time" title="${fullDateToolip}">${time}</span>
+                        ${verbosityBadge(ctx.verbosity)}
+                        <div class="et-bubble-actions">
+                            ${ctx.has('react') ? `<button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>` : ''}
+                            <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
                         </div>
                     </div>
                     <div class="et-bubble-reactions-bar" id="et-reactions-bar-${index}">
@@ -216,22 +211,19 @@
     }
 
     /** The character is typing: a message at the end of the list. */
-    function typing(ctx) {
-        const avatarHtml = ctx.showAvatar ? ctx.avatarHtml(ctx.charName, 'et-bubble-avatar') : '';
+    function typing() {
         return `
             <div class="et-message et-message-char et-message-typing" id="et-typing-indicator-msg" data-et-role="typing">
                 <div class="et-message-body">
                     <div class="et-bubble et-bubble-char et-typing-bubble" title="Character is typing">
                         <div class="et-typing-dots"><span></span><span></span><span></span></div>
-                        ${avatarHtml}
                     </div>
                 </div>
             </div>`;
     }
 
     /** An image is being generated: shown instead of the typing indicator. */
-    function imageGenerating(ctx) {
-        const avatarHtml = ctx.showAvatar ? ctx.avatarHtml(ctx.charName, 'et-bubble-avatar') : '';
+    function imageGenerating() {
         return `
             <div class="et-message et-message-char et-message-typing" id="et-image-gen-indicator-msg" data-et-role="image-generating">
                 <div class="et-message-body">
@@ -246,7 +238,6 @@
                             </div>
                             <span class="et-image-gen-label">Generating image…</span>
                         </div>
-                        ${avatarHtml}
                     </div>
                 </div>
             </div>`;
