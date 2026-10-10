@@ -66,8 +66,10 @@
     loadEchoTextModule('lib/theme-editor.js', 'EchoTextThemeEditor');
     loadEchoTextModule('lib/context-override.js', 'EchoTextContextOverride');
     loadEchoTextModule('lib/rich-messages.js', 'EchoTextRichMessages');
+    loadEchoTextModule('lib/chat-view-model.js', 'EchoTextChatViewModel');
 
     const RichMessages = window.EchoTextRichMessages;
+    const ChatViewModel = window.EchoTextChatViewModel;
 
     // ============================================================
     // THEME PRESETS
@@ -2929,10 +2931,9 @@
 
     /** Ids of the user's tapbacks on a character message (none on user messages). */
     function getUserReactionIds(msg) {
-        if (!msg || msg.is_user) return [];
-        return Object.entries(normalizeReactionStore(msg.reactions))
-            .filter(([id, data]) => data.mine && FA_REACTIONS.some(r => r.id === id))
-            .map(([id]) => id);
+        return ChatViewModel.getStoredReactions(msg, getReactionIds())
+            .filter(reaction => reaction.mine)
+            .map(reaction => reaction.id);
     }
 
     /**
@@ -4279,13 +4280,7 @@
 
         // Surgical DOM update — avoid full re-render just for receipt icon change
         if (panelOpen) {
-            const receiptMap = {
-                sent: { icon: 'fa-paper-plane', label: 'Sent' },
-                delivered: { icon: 'fa-check', label: 'Delivered' },
-                read: { icon: 'fa-check-double', label: 'Read' },
-                ghosted: { icon: 'fa-eye-slash', label: 'Read, then paused (ghosting)' }
-            };
-            const def = receiptMap[state] || receiptMap.sent;
+            const def = RECEIPT_STATES[state] || RECEIPT_STATES.sent;
             const tip = note || def.label;
             const receiptEl = jQuery(`.et-message[data-index="${msgIndex}"] .et-read-receipt`);
             if (receiptEl.length) {
@@ -5872,40 +5867,19 @@
         });
     }
 
-    /**
-     * Display parts for a message. Character replies get one bubble per line;
-     * user messages only split around rich content. <react> tags aren't bubbles
-     * (they show on the user's message — see getMessageReactions); a reply that
-     * is only a reaction gets a small note instead. Always returns at least one
-     * part so empty turns (e.g. a silent image reply) still get their bubble.
-     */
+    /** Display parts for a message, one per bubble (see ChatViewModel.getMessageDisplayParts). */
     function getMessageDisplayParts(msg) {
-        const allParts = RichMessages.parseMessageParts(msg?.mes, { splitLines: !msg?.is_user });
-        const parts = allParts.filter(part => part.type !== 'react');
-        if (!parts.length) {
-            const reaction = allParts.find(part => part.reaction)?.reaction;
-            return [reaction ? { type: 'reaction_note', reaction } : { type: 'text', text: '' }];
-        }
+        return ChatViewModel.getMessageDisplayParts(msg, getCharacterName());
+    }
 
-        // Weaker models sometimes prefix every line script-style ("Name: ...")
-        if (!msg.is_user) {
-            const senderName = msg.charName || getCharacterName();
-            const escaped = senderName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const prefix = new RegExp(`^${escaped}\\s*[:：]\\s*`);
-            for (const part of parts) {
-                if (part.type === 'text') part.text = part.text.replace(prefix, '');
-            }
-        }
-        const visible = parts.filter(part => part.type !== 'text' || part.text);
-        return visible.length ? visible : [{ type: 'text', text: '' }];
+    /** Ids of the reactions this panel can show. */
+    function getReactionIds() {
+        return FA_REACTIONS.map(r => r.id);
     }
 
     /** Reaction ids a character's message applies with <react> tags. */
     function getMessageReactions(msg) {
-        if (!msg || msg.is_user) return [];
-        return RichMessages.parseMessageParts(msg.mes)
-            .filter(part => part.type === 'react' && FA_REACTIONS.some(r => r.id === part.reaction))
-            .map(part => part.reaction);
+        return ChatViewModel.getMessageReactions(msg, getReactionIds());
     }
 
     /** Stand-in for a reply that is only a reaction (the reaction itself shows on the user's message). */
@@ -5921,38 +5895,29 @@
         return `<div class="et-photo-card" role="button" tabindex="0" title="Tap to view"><div class="et-photo-card-frame"><i class="fa-regular fa-image et-photo-card-icon"></i><div class="et-photo-card-caption"><span>${safeDesc || 'Photo'}</span></div></div></div>`;
     }
 
-    /**
-     * A transfer or transfer-response card. `transfer` is the part's entry from
-     * resolveTransfers(): its status, and the amount a response settled.
-     */
-    function buildTransferCardHtml(part, transfer, isUser) {
-        const amount = transfer?.amount || part.amount;
-        let state, icon, label;
-        let actionable = false;
+    /** A transfer or transfer-response card, from a view-model part (its status and display amount). */
+    function buildTransferCardHtml(part) {
+        const { status: state, actionable } = part;
+        let icon, label;
         if (part.type === 'transfer') {
-            state = transfer?.status || 'pending';
             icon = { accepted: 'fa-circle-check', declined: 'fa-arrow-rotate-left' }[state] || 'fa-money-bill-transfer';
-            // Only a pending transfer from the character waits on the user
-            actionable = state === 'pending' && !isUser;
             label = { accepted: 'Accepted', declined: 'Declined' }[state] || (actionable ? 'Tap to accept' : 'Pending');
         } else {
             const accepted = part.type === 'transfer_accept';
-            state = accepted ? 'accepted' : 'declined';
             icon = accepted ? 'fa-circle-check' : 'fa-arrow-rotate-left';
             label = accepted ? 'Received' : 'Declined';
         }
-        const displayAmount = RichMessages.formatAmount(amount, transfer?.symbol);
-        const amountText = escapeHtml(displayAmount || 'Transfer');
+        const amountText = escapeHtml(part.displayAmount || 'Transfer');
         // The response tag names the currency explicitly ("$20.00")
-        const actionAttrs = actionable ? ` data-amount="${escapeHtml(displayAmount)}" role="button" tabindex="0"` : '';
+        const actionAttrs = actionable ? ` data-amount="${escapeHtml(part.displayAmount)}" role="button" tabindex="0"` : '';
         return `<div class="et-transfer-card et-transfer-${state}${actionable ? ' et-transfer-actionable' : ''}"${actionAttrs}><div class="et-transfer-body"><div class="et-transfer-icon"><i class="fa-solid ${icon}"></i></div><div class="et-transfer-info"><div class="et-transfer-amount">${amountText}</div><div class="et-transfer-status">${label}</div></div></div><div class="et-transfer-footer">Transfer</div></div>`;
     }
 
     /** Inner content of one bubble: formatted text, a photo card, or a transfer card. */
-    function buildPartContentHtml(part, transfer, isUser) {
+    function buildPartContentHtml(part) {
         if (part.type === 'photo') return buildPhotoCardHtml(part.desc);
         if (part.type === 'reaction_note') return buildReactionNoteHtml(part.reaction);
-        if (part.type !== 'text') return buildTransferCardHtml(part, transfer, isUser);
+        if (part.type !== 'text') return buildTransferCardHtml(part);
         return `<div class="et-bubble-text">${formatMessageText(part.text)}</div>`;
     }
 
@@ -5968,52 +5933,10 @@
      * Bubbles shown before a message's main (footer-bearing) bubble — one per part
      * except the last, which goes in the main bubble itself.
      */
-    function buildLeadingPartBubblesHtml(parts, contents, sideClass, msgIndex, isUser) {
-        return parts.slice(0, -1).map((part, j) =>
-            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}">${contents[j]}<button class="et-part-dots-btn" data-index="${msgIndex}" data-part="${j}" data-is-user="${isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
+    function buildLeadingPartBubblesHtml(view, sideClass) {
+        return view.parts.slice(0, -1).map((part, j) =>
+            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}">${buildPartContentHtml(part)}<button class="et-part-dots-btn" data-index="${view.index}" data-part="${j}" data-is-user="${view.isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
         ).join('');
-    }
-
-    /**
-     * Works out every transfer's status from the responses that follow it. A
-     * <transfer_accept>/<transfer_decline> settles a pending transfer from the
-     * other side — the latest one with the same value, else the latest one — and
-     * takes that transfer's amount when it names none.
-     *
-     * Currency: an amount without a symbol (models usually write a bare number)
-     * uses the last currency named earlier in the chat, else the default.
-     * @returns {Map<string, object>} keyed "messageIndex:partIndex" — transfers get
-     *   { status, amount, symbol }, responses get { amount, symbol }
-     */
-    function resolveTransfers(history, allParts) {
-        const info = new Map();
-        const pending = { user: [], char: [] };
-        let chatCurrency = RichMessages.DEFAULT_CURRENCY;
-        history.forEach((msg, i) => {
-            const side = msg.is_user ? 'user' : 'char';
-            const other = msg.is_user ? 'char' : 'user';
-            allParts[i].forEach((part, j) => {
-                if (part.type !== 'transfer' && part.type !== 'transfer_accept' && part.type !== 'transfer_decline') return;
-                const { symbol: ownSymbol, value } = RichMessages.splitAmount(part.amount);
-                if (part.type === 'transfer') {
-                    const entry = { status: 'pending', amount: part.amount, value, symbol: ownSymbol || chatCurrency };
-                    info.set(`${i}:${j}`, entry);
-                    pending[side].push(entry);
-                } else {
-                    const queue = pending[other];
-                    let k = value ? queue.map(t => t.value).lastIndexOf(value) : -1;
-                    if (k === -1) k = queue.length - 1;
-                    const target = k >= 0 ? queue.splice(k, 1)[0] : null;
-                    if (target) target.status = part.type === 'transfer_accept' ? 'accepted' : 'declined';
-                    info.set(`${i}:${j}`, {
-                        amount: part.amount || target?.amount || '',
-                        symbol: ownSymbol || target?.symbol || chatCurrency,
-                    });
-                }
-                if (ownSymbol) chatCurrency = ownSymbol;
-            });
-        });
-        return info;
     }
 
     /** The currency a new transfer defaults to: the last one named in this chat, else the default. */
@@ -6029,10 +5952,6 @@
         return RichMessages.DEFAULT_CURRENCY;
     }
 
-    // Consecutive user messages sent within this window render as one group: only
-    // the last shows the footer (time, name, receipt)
-    const MESSAGE_GROUP_WINDOW_MS = 5 * 60 * 1000;
-
     // Character messages whose bubbles already played their arrival sequence,
     // keyed by send_date, so later re-renders show them at once.
     const staggeredMessageKeys = new Set();
@@ -6041,11 +5960,11 @@
      * A freshly arrived multi-bubble reply is revealed one bubble at a time;
      * anything older (re-renders, reopening the panel, history) appears at once.
      */
-    function shouldStaggerReveal(msg, partCount) {
-        if (msg.is_user || partCount < 2 || !msg.send_date) return false;
-        if (staggeredMessageKeys.has(msg.send_date)) return false;
-        staggeredMessageKeys.add(msg.send_date);
-        return Date.now() - msg.send_date < 15000;
+    function shouldStaggerReveal(view) {
+        if (view.isUser || view.parts.length < 2 || !view.timestamp) return false;
+        if (staggeredMessageKeys.has(view.timestamp)) return false;
+        staggeredMessageKeys.add(view.timestamp);
+        return Date.now() - view.timestamp < 15000;
     }
 
     /**
@@ -6269,6 +6188,21 @@
         }
     }
 
+    const RECEIPT_STATES = {
+        sent: { icon: 'fa-paper-plane', label: 'Sent' },
+        delivered: { icon: 'fa-check', label: 'Delivered' },
+        read: { icon: 'fa-check-double', label: 'Read' },
+        ghosted: { icon: 'fa-eye-slash', label: 'Read, then paused (ghosting)' }
+    };
+
+    /** Read-receipt icon for a user message's view-model receipt ({ state, note }). */
+    function buildReceiptHtml(receipt) {
+        const { DOMPurify } = SillyTavern.libs;
+        const def = RECEIPT_STATES[receipt.state] || RECEIPT_STATES.sent;
+        const tip = DOMPurify.sanitize(receipt.note || def.label, { ALLOWED_TAGS: [] });
+        return `<span class="et-read-receipt et-read-receipt-${receipt.state}" title="${tip}"><i class="fa-solid ${def.icon}"></i></span>`;
+    }
+
     // Track which delete button is pending 2nd click
     let deleteConfirmIndex = -1;
     let deleteConfirmTimer = null;
@@ -6292,65 +6226,49 @@
         const { DOMPurify } = SillyTavern.libs;
         const charName = getCharacterName();
         const tethered = isTetheredMode();
-        const userName = getUserName();
-
-        const receiptMap = {
-            sent: { icon: 'fa-paper-plane', label: 'Sent' },
-            delivered: { icon: 'fa-check', label: 'Delivered' },
-            read: { icon: 'fa-check-double', label: 'Read' },
-            ghosted: { icon: 'fa-eye-slash', label: 'Read, then paused (ghosting)' }
-        };
-
-        const buildReceiptHtml = (msg) => {
-            const state = String(msg?.meta?.receipt?.state || 'sent');
-            const def = receiptMap[state] || receiptMap.sent;
-            const tip = DOMPurify.sanitize(msg?.meta?.receipt?.note || def.label, { ALLOWED_TAGS: [] });
-            return `<span class="et-read-receipt et-read-receipt-${state}" title="${tip}"><i class="fa-solid ${def.icon}"></i></span>`;
-        };
-
-        // Index of the last character message — swipe nav is only rendered there
-        const lastCharMsgIndex = history.reduce((last, msg, i) => (!msg.is_user ? i : last), -1);
-
-        // A transfer's status depends on later messages, so parse everything first
-        const allParts = history.map(getMessageDisplayParts);
-        const transfers = resolveTransfers(history, allParts);
-
-        // A character's <react> applies to the user's latest message before the reply
-        const tagReactions = new Map();
-        let lastUserIndex = -1;
-        history.forEach((m, i) => {
-            if (m.is_user) lastUserIndex = i;
-            else if (lastUserIndex >= 0) {
-                for (const reaction of getMessageReactions(m)) tagReactions.set(lastUserIndex, reaction);
-            }
+        const showAvatar = settings.showAvatar !== false;
+        const view = ChatViewModel.buildChatViewModel(history, {
+            charName,
+            userName: getUserName(),
+            reactionIds: getReactionIds(),
+            combineMode: !!(groupManager && groupManager.isGroupSession() && groupManager.isCombineMode()),
+            swipes: !!settings.swipedMessages,
+            memoryHighlights: !!(settings.memoryEnabled && settings.memoryAutoExtract),
         });
 
-        history.forEach((msg, index) => {
-            const isUser = msg.is_user;
-            const parts = allParts[index];
-            const contents = parts.map((part, j) => buildPartContentHtml(part, transfers.get(`${index}:${j}`), isUser));
-            const mainPart = parts[parts.length - 1];
+        // Verbosity indicator
+        const charKey = getCharacterKey();
+        const verbosity = charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null;
+        const verbosityLabels = { short: '📏', medium: '📋', long: '📜' };
+        const verbosityTooltips = {
+            short: 'Short: 1–2 texts per reply',
+            medium: 'Medium: 2–4 texts per reply',
+            long: 'Long: 4–7 texts per reply'
+        };
+        const verbosityBadge = verbosity && verbosity !== 'medium'
+            ? `<span class="et-verbosity-badge" title="${verbosityTooltips[verbosity] || 'Verbosity'}">${verbosityLabels[verbosity] || ''}</span>` : '';
+
+        view.messages.forEach((m) => {
+            const index = m.index;
+            const mainPart = m.parts[m.parts.length - 1];
             const mainCardClass = partBubbleClass(mainPart);
-            const next = history[index + 1];
-            const groupedWithNext = isUser && !!next?.is_user
-                && (next.send_date || 0) - (msg.send_date || 0) < MESSAGE_GROUP_WINDOW_MS;
-            const msgDate = new Date(msg.send_date || Date.now());
+            const msgDate = new Date(m.timestamp || Date.now());
             const time = msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
             const fullDateToolip = msgDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
             let bubbleHtml;
-            if (isUser) {
-                const safeUserName = DOMPurify.sanitize(userName, { ALLOWED_TAGS: [] });
+            if (m.isUser) {
+                const safeUserName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
                 bubbleHtml = `
-                <div class="et-message et-message-user${groupedWithNext ? ' et-message-grouped' : ''}" data-index="${index}">
-                    ${buildLeadingPartBubblesHtml(parts, contents, 'et-bubble-user', index, true)}
+                <div class="et-message et-message-user${m.groupedWithNext ? ' et-message-grouped' : ''}" data-index="${index}">
+                    ${buildLeadingPartBubblesHtml(m, 'et-bubble-user')}
                     <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}">
-                        ${contents[contents.length - 1]}
-                        ${groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
+                        ${buildPartContentHtml(mainPart)}
+                        ${m.groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
                         <div class="et-message-footer">
                             <span class="et-message-time" title="${fullDateToolip}">${time}</span>
                             <span class="et-user-name">${safeUserName}</span>
-                            ${buildReceiptHtml(msg)}
+                            ${buildReceiptHtml(m.receipt)}
                             <div class="et-bubble-actions">
                                 <button class="et-dots-btn" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
                             </div>
@@ -6359,59 +6277,32 @@
                     <div class="et-char-reaction-bar" id="et-char-reaction-${index}"></div>
                 </div>`;
             } else {
-                // ── Combine mode: each character message may carry its own name + avatar ──
-                const inCombineMode = groupManager && groupManager.isGroupSession() && groupManager.isCombineMode();
-                const msgSenderName = (inCombineMode && msg.charName) ? msg.charName : charName;
-                const safeCharName = DOMPurify.sanitize(msgSenderName, { ALLOWED_TAGS: [] });
-
-                // Avatar — use the specific character's avatar in combine mode
-                const showAvatar = settings.showAvatar !== false;
+                // Combine mode: each character message carries its own name + avatar
+                const safeCharName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
                 let avatarHtml = '';
                 if (showAvatar) {
-                    if (inCombineMode && msg.charKey && groupManager) {
-                        const msgChar = groupManager.getGroupMemberByKey(msg.charKey);
-                        if (msgChar) {
-                            avatarHtml = groupManager.buildAvatarHtmlForChar(
-                                msgChar, 'et-bubble-avatar et-bubble-avatar-footer', '', true);
-                        } else {
-                            avatarHtml = buildAvatarHtml(msgSenderName, 'et-bubble-avatar et-bubble-avatar-footer', '', true);
-                        }
-                    } else {
-                        avatarHtml = buildAvatarHtml(msgSenderName, 'et-bubble-avatar et-bubble-avatar-footer', '', true);
-                    }
+                    const member = m.charKey && groupManager ? groupManager.getGroupMemberByKey(m.charKey) : null;
+                    avatarHtml = member
+                        ? groupManager.buildAvatarHtmlForChar(member, 'et-bubble-avatar et-bubble-avatar-footer', '', true)
+                        : buildAvatarHtml(m.senderName, 'et-bubble-avatar et-bubble-avatar-footer', '', true);
                 }
 
-                // Verbosity indicator
-                const charKey = getCharacterKey();
-                const verbosity = charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null;
-                const verbosityLabels = { short: '📏', medium: '📋', long: '📜' };
-                const verbosityTooltips = {
-                    short: 'Short: 1–2 texts per reply',
-                    medium: 'Medium: 2–4 texts per reply',
-                    long: 'Long: 4–7 texts per reply'
-                };
-                const verbosityBadge = verbosity && verbosity !== 'medium'
-                    ? `<span class="et-verbosity-badge" title="${verbosityTooltips[verbosity] || 'Verbosity'}">${verbosityLabels[verbosity] || ''}</span>` : '';
-
-                // Swipe navigation — show nav only on the last character message
-                const hasSwipes = !!settings.swipedMessages && (index === lastCharMsgIndex);
-                const swipeCount = (hasSwipes && msg.swipes && msg.swipes.length > 0) ? msg.swipes.length : 1;
-                const swipeIdx = (hasSwipes && msg.swipes) ? Math.max(0, Math.min(msg.swipeIndex ?? 0, swipeCount - 1)) : 0;
-                const swipeIsLast = swipeIdx >= swipeCount - 1;
-                const swipeNavHtml = hasSwipes ? `
+                // Swipe navigation — only on the last character message
+                const swipe = m.swipe;
+                const swipeNavHtml = swipe ? `
                             <div class="et-swipe-nav">
-                                <button class="et-swipe-btn et-swipe-prev" data-index="${index}" title="Previous version"${swipeIdx === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
-                                <span class="et-swipe-counter">${swipeIdx + 1} / ${swipeCount}</span>
-                                <button class="et-swipe-btn et-swipe-next${swipeIsLast ? ' et-swipe-regen' : ''}" data-index="${index}" title="${swipeIsLast ? 'Regenerate (new version)' : 'Next version'}"><i class="fa-solid fa-chevron-right"></i></button>
+                                <button class="et-swipe-btn et-swipe-prev" data-index="${index}" title="Previous version"${swipe.index === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
+                                <span class="et-swipe-counter">${swipe.index + 1} / ${swipe.count}</span>
+                                <button class="et-swipe-btn et-swipe-next${swipe.isLast ? ' et-swipe-regen' : ''}" data-index="${index}" title="${swipe.isLast ? 'Regenerate (new version)' : 'Next version'}"><i class="fa-solid fa-chevron-right"></i></button>
                             </div>` : '';
 
                 bubbleHtml = `
                 <div class="et-message et-message-char" data-index="${index}">
                     <div class="et-message-body">
-                        ${buildLeadingPartBubblesHtml(parts, contents, 'et-bubble-char', index, false)}
+                        ${buildLeadingPartBubblesHtml(m, 'et-bubble-char')}
                         <div class="et-bubble et-bubble-char et-bubble-main${mainCardClass}">
-                            ${contents[contents.length - 1]}
-                            ${buildImageAttachmentHtml(msg, index)}
+                            ${buildPartContentHtml(mainPart)}
+                            ${buildImageAttachmentHtml(m, index)}
                             ${swipeNavHtml}
                             <div class="et-message-footer">
                                 <div class="et-char-info-pill${showAvatar ? '' : ' et-pill-no-avatar'}">
@@ -6435,25 +6326,20 @@
 
             inner.append(bubbleHtml);
 
-            if (shouldStaggerReveal(msg, parts.length)) {
+            if (shouldStaggerReveal(m)) {
                 staggerRevealParts(inner.children().last());
             }
 
-            // Apply memory highlights to user bubbles
-            if (isUser && msg.memoryHighlights && msg.memoryHighlights.length > 0
-                    && settings.memoryEnabled && settings.memoryAutoExtract) {
-                try { applyMemoryHighlights(inner.children().last(), msg); } catch (e) { /* ignore */ }
+            if (m.memoryHighlights.length) {
+                try { applyMemoryHighlights(inner.children().last(), m); } catch (e) { /* ignore */ }
             }
 
-            if (!isUser) {
-                renderStoredReactions(index, msg);
+            if (!m.isUser) {
+                renderStoredReactions(index, m.reactions);
             }
 
-            // Restore persisted character reactions on user bubbles
-            // Reaction from a <react> tag, else one stored by the former auto-reaction
-            const charReaction = isUser ? (tagReactions.get(index) || msg.charReaction) : null;
-            if (charReaction) {
-                renderCharacterReaction(index, charReaction);
+            if (m.charReaction) {
+                renderCharacterReaction(index, m.charReaction);
             }
         });
 
@@ -6570,8 +6456,8 @@
         });
 
         // Bind touch-swipe gesture on the last char bubble (mobile only)
-        if (settings.swipedMessages && isMobileDevice() && lastCharMsgIndex >= 0) {
-            bindBubbleTouchSwipe(inner, lastCharMsgIndex);
+        if (settings.swipedMessages && isMobileDevice() && view.lastCharIndex >= 0) {
+            bindBubbleTouchSwipe(inner, view.lastCharIndex);
         }
 
         if (preserveScroll && messagesEl && savedScrollTop !== null) {
@@ -7052,34 +6938,24 @@
         });
     }
 
-    function normalizeReactionStore(reactions) {
-        if (!reactions || typeof reactions !== 'object' || Array.isArray(reactions)) return {};
-        const normalized = {};
-        for (const [reactionId, data] of Object.entries(reactions)) {
-            const count = Math.max(0, parseInt(data?.count, 10) || 0);
-            if (count <= 0) continue;
-            normalized[reactionId] = {
-                count,
-                mine: data?.mine === true
-            };
-        }
-        return normalized;
-    }
-
-    function renderStoredReactions(msgIndex, msg) {
+    /**
+     * Shows the user's tapbacks under a character message.
+     * @param {number} msgIndex
+     * @param {Array<{id: string, count: number, mine: boolean}>} reactions - see ChatViewModel.getStoredReactions
+     */
+    function renderStoredReactions(msgIndex, reactions) {
         const container = jQuery(`#et-reactions-${msgIndex}`);
-        if (!container.length || msg?.is_user) return;
+        if (!container.length) return;
 
         container.empty();
-        const reactions = normalizeReactionStore(msg?.reactions);
-        for (const [reactionId, reactionData] of Object.entries(reactions)) {
-            const reactDef = FA_REACTIONS.find(r => r.id === reactionId);
+        for (const reaction of reactions) {
+            const reactDef = FA_REACTIONS.find(r => r.id === reaction.id);
             if (!reactDef) continue;
 
             const pill = jQuery(`
-                <button class="et-reaction-pill${reactionData.mine ? ' et-reaction-mine' : ''}" data-emoji="${reactionId}" title="${reactDef.label}" style="--react-color:${reactDef.color}">
+                <button class="et-reaction-pill${reaction.mine ? ' et-reaction-mine' : ''}" data-emoji="${reaction.id}" title="${reactDef.label}" style="--react-color:${reactDef.color}">
                     <i class="${reactDef.icon} et-reaction-icon"></i>
-                    <span class="et-reaction-count">${reactionData.count}</span>
+                    <span class="et-reaction-count">${reaction.count}</span>
                 </button>
             `);
             container.append(pill);
@@ -7105,7 +6981,7 @@
         const msg = history[msgIndex];
         if (!msg || msg.is_user) return;
 
-        msg.reactions = normalizeReactionStore(msg.reactions);
+        msg.reactions = ChatViewModel.normalizeReactionStore(msg.reactions);
         const current = msg.reactions[reactionId] || { count: 0, mine: false };
         let direction = 0;
 
@@ -7138,7 +7014,7 @@
         saveChatHistory(history);
 
         // Update DOM in-place to prevent flicker
-        renderStoredReactions(msgIndex, msg);
+        renderStoredReactions(msgIndex, ChatViewModel.getStoredReactions(msg, getReactionIds()));
 
         // Smoothly scroll the reaction bar into view
         setTimeout(() => {
