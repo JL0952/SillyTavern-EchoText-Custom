@@ -8116,6 +8116,12 @@ html.et-bg-light {
     opacity: 1;
 }
 
+/* Mode and status entries: only for platform headers without the mode toggle
+   and status row (the platform's CSS shows them) */
+.et-overflow-menu-item.et-overflow-header-only {
+    display: none;
+}
+
 /* Danger tint on Clear History hover */
 #et-overflow-clear:hover {
     background: rgba(239, 68, 68, 0.1);
@@ -12344,6 +12350,14 @@ textarea.et-mem-save-snippet-edit::placeholder {
 
 .et-message .et-message-footer .et-footer-name {
     color: var(--et-theme-color, #4da6ff);
+}
+
+/* Mirror of the character side: a user message's buttons lead its footer, so the
+   time and name line up with the bubble's right edge */
+.et-message-user .et-message-footer .et-bubble-actions {
+    order: -1;
+    margin-left: -4px;
+    margin-right: 0;
 }
 
 /* Per-bubble menu on the leading bubbles of a multi-bubble message (Copy /

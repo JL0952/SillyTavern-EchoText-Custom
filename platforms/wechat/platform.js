@@ -10,6 +10,10 @@
      * shows consecutive texts. No reactions and no read receipts. Templates follow
      * the contract in platforms/echotext/platform.js: pure functions, clickable
      * elements carry data-et-action, looked-up elements carry data-et-role.
+     *
+     * The header and input bar are EchoText's own elements restyled by
+     * platform.css (ChatHeader, InputBar, ChatGlyphs), so all their behaviour
+     * stays EchoText's.
      */
 
     const WEEKDAYS = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
@@ -121,9 +125,9 @@
         return '';
     }
 
-    /** WeChat says the other side is typing in words, not with a bubble. */
+    /** WeChat says the other side is typing in the title (platform.css, on data-et-typing), not in the list. */
     function typing() {
-        return '<div class="wx-message" data-et-role="typing"><div class="wx-system">对方正在输入…</div></div>';
+        return '';
     }
 
     function imageGenerating(ctx) {

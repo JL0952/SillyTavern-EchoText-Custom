@@ -4188,6 +4188,8 @@
     function setTypingIndicatorVisible(visible) {
         showTypingIndicator = !!visible;
         if (!panelOpen) return;
+        // For platforms that say it in the header ("对方正在输入…") rather than in the list
+        jQuery('#et-panel').attr('data-et-typing', showTypingIndicator ? '' : null);
 
         const inner = jQuery('#et-messages-inner');
         if (!inner.length) return;
@@ -4813,6 +4815,14 @@
                             <i class="fa-solid fa-gear"></i>
                             <span>Settings</span>
                         </div>
+                        <!-- Stand-ins for the mode toggle and status row, for platform headers without them -->
+                        <div class="et-overflow-menu-item et-overflow-header-only" id="et-overflow-mode">
+                            ${modeMenuItemInner(tethered)}
+                        </div>
+                        <div class="et-overflow-menu-item et-overflow-header-only" id="et-overflow-status">
+                            <i class="fa-solid fa-heart-pulse"></i>
+                            <span>Status</span>
+                        </div>
                         <div class="et-overflow-menu-item" id="et-overflow-context" style="display:none">
                             <i class="fa-solid fa-book-open-reader"></i>
                             <span>Context</span>
@@ -4854,6 +4864,11 @@
                 </button>
             </div>
         </div>`;
+    }
+
+    /** The overflow menu's chat-mode entry: the current mode; tapping switches it. */
+    function modeMenuItemInner(tethered) {
+        return `<i class="fa-solid ${tethered ? 'fa-link' : 'fa-link-slash'}"></i><span>Mode: ${tethered ? 'Tethered' : 'Untethered'}</span>`;
     }
 
     function openPanel() {
@@ -5064,6 +5079,19 @@
             moveModalToPortal('#et-ctx-overlay');
         });
 
+        // Shown only by platforms whose header hides the mode toggle and status row
+        jQuery('#et-overflow-mode').on('click', (e) => {
+            e.stopPropagation();
+            closeOverflowMenu();
+            jQuery('#et-mode-toggle-btn').trigger('click');
+        });
+
+        jQuery('#et-overflow-status').on('click', (e) => {
+            e.stopPropagation();
+            closeOverflowMenu();
+            jQuery('#et-panel-status-trigger').trigger('click');
+        });
+
         jQuery(document).on('click.et-overflow', function (e) {
             if (!jQuery(e.target).closest('#et-overflow-btn, #et-overflow-menu').length) {
                 closeOverflowMenu();
@@ -5151,6 +5179,7 @@
             btn.attr('title', tethered ? 'Tethered: Syncs mood and context with the main chat.' : 'Untethered: Standalone session with no main chat sync.');
             btn.addClass('et-mode-toggle-anim');
             setTimeout(() => btn.removeClass('et-mode-toggle-anim'), 450);
+            jQuery('#et-overflow-mode').html(modeMenuItemInner(tethered));
 
             // Context override is Untethered-only — sync visibility on mode switch
             const hasChar = !!getCurrentCharacter();
@@ -5483,7 +5512,13 @@
         const panelRect = document.getElementById('et-panel').getBoundingClientRect();
         const left = Math.max(8, btnRect.left - panelRect.left - 6);
         const bottom = panelRect.bottom - btnRect.top + 10;
-        menu.css({ left: left + 'px', bottom: bottom + 'px', top: 'auto', 'transform-origin': 'bottom left' });
+        // Opens to the right of the "+", or to its left when "+" sits at the right edge (WeChat)
+        if (left + menu.outerWidth() > panelRect.width - 8) {
+            const right = Math.max(8, panelRect.right - btnRect.right - 6);
+            menu.css({ left: 'auto', right: right + 'px', bottom: bottom + 'px', top: 'auto', 'transform-origin': 'bottom right' });
+        } else {
+            menu.css({ left: left + 'px', bottom: bottom + 'px', top: 'auto', 'transform-origin': 'bottom left' });
+        }
         btn.addClass('et-attach-open');
         requestAnimationFrame(() => menu.addClass('et-dots-menu-open'));
 
@@ -6193,7 +6228,11 @@
      */
     function syncPlatformChrome() {
         const platform = getActivePlatform();
-        jQuery('#et-panel').attr({ 'data-platform': platform.id, 'data-et-scheme': getColorScheme() });
+        jQuery('#et-panel').attr({
+            'data-platform': platform.id,
+            'data-et-scheme': getColorScheme(),
+            'data-et-typing': showTypingIndicator ? '' : null,
+        });
 
         const href = platform.stylesheet
             ? `${BASE_URL}/platforms/${platform.id}/${platform.stylesheet}${VERSION_QUERY}`
