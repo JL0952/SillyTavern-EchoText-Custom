@@ -3303,56 +3303,19 @@
      * this correction so no animated jump is visible.
      */
     function updateSwipeInPlace(msgIndex, h) {
-        const msg = h[msgIndex];
-        if (!msg) return;
-
-        const inner = jQuery('#et-messages-inner');
-        const msgEl = inner.find(`.et-message[data-index="${msgIndex}"]`);
-        // Multi-bubble or photo messages (before or after the swipe) are rebuilt
-        // rather than patched in place
-        // ...as are swipes whose reaction (shown on the user's message) may change
-        const newParts = getMessageDisplayParts(msg);
-        if (!msgEl.length || newParts.length > 1 || newParts[0].type !== 'text'
-                || msgEl.find('.et-bubble-part, .et-bubble-card').length
-                || getMessageReactions(msg).length || inner.find('.et-char-reaction-pill').length) {
+        if (!h[msgIndex]) return;
+        if (!findMessageElement(msgIndex).length) {
             renderMessages(h, true);
             return;
         }
-
-        const swipeCount = msg.swipes ? msg.swipes.length : 1;
-        const swipeIdx   = msg.swipeIndex ?? 0;
-        const swipeIsLast = swipeIdx >= swipeCount - 1;
 
         // ── Scroll anchor: snapshot before DOM changes ────────────────────
         const messagesEl = document.getElementById('et-messages');
         const scrollTopBefore    = messagesEl ? messagesEl.scrollTop    : 0;
         const scrollHeightBefore = messagesEl ? messagesEl.scrollHeight : 0;
 
-        // ── DOM changes ───────────────────────────────────────────────────
-
-        // Update bubble text
-        msgEl.find('.et-bubble-text').html(formatMessageText(newParts[0].text));
-
-        // Update image attachment in-place
-        const existingImg = msgEl.find('.et-image-attachment');
-        const newImgHtml  = buildImageAttachmentHtml(msg);
-        if (newImgHtml) {
-            if (existingImg.length) {
-                existingImg.replaceWith(newImgHtml);
-            } else {
-                msgEl.find('.et-bubble-text').after(newImgHtml);
-            }
-        } else {
-            existingImg.remove();
-        }
-
-        // Update swipe counter and button states
-        msgEl.find('.et-swipe-counter').text(`${swipeIdx + 1} / ${swipeCount}`);
-        msgEl.find('.et-swipe-prev').prop('disabled', swipeIdx === 0);
-        const nextBtn = msgEl.find('.et-swipe-next');
-        nextBtn.toggleClass('et-swipe-regen', swipeIsLast)
-               .attr('title', swipeIsLast ? 'Regenerate (new version)' : 'Next version')
-               .prop('disabled', false);
+        // The message, and the user message its reaction lands on, are re-rendered
+        refreshMessages(h);
 
         // ── Scroll anchor: compensate for height delta ────────────────────
         // Any height change in the message shifts scrollHeight by the same amount.
@@ -3538,9 +3501,9 @@
      */
     function bindBubbleTouchSwipe(inner, msgIndex) {
         if (msgIndex < 0) return;
-        const msgEl = inner.find(`.et-message[data-index="${msgIndex}"]`);
+        const msgEl = findMessageElement(msgIndex);
         if (!msgEl.length) return;
-        const bubble = msgEl.find('.et-bubble-main')[0];
+        const bubble = msgEl.find('[data-et-role~="main"]')[0];
         if (!bubble) return;
 
         const AXIS_LOCK_PX = 8;   // min movement before axis is committed
@@ -3605,20 +3568,21 @@
                 syncMsgFromSwipe(msg);
                 saveChatHistory(h);
 
-                // ── Phase 2: place at enter-from side (invisible) ──────────
-                bubble.style.transition = 'none';
-                bubble.style.transform  = `translateX(${enterX}px)`;
-                bubble.style.opacity    = '0';
-
-                // Update text/counter/buttons while the bubble is off-screen
+                // Re-render the message while the bubble is off-screen
                 updateSwipeInPlace(msgIndex, h);
 
+                // ── Phase 2: place the new bubble at the enter-from side (invisible) ──
+                const entering = findMessageElement(msgIndex).find('[data-et-role~="main"]')[0] || bubble;
+                entering.style.transition = 'none';
+                entering.style.transform  = `translateX(${enterX}px)`;
+                entering.style.opacity    = '0';
+
                 // ── Phase 3: animate in ────────────────────────────────────
-                void bubble.offsetHeight; // force reflow
-                bubble.style.transition = 'transform 0.24s cubic-bezier(0.22,1,0.36,1), opacity 0.18s ease-out';
-                bubble.style.transform  = '';
-                bubble.style.opacity    = '';
-                setTimeout(clearStyles, 270);
+                void entering.offsetHeight; // force reflow
+                entering.style.transition = 'transform 0.24s cubic-bezier(0.22,1,0.36,1), opacity 0.18s ease-out';
+                entering.style.transform  = '';
+                entering.style.opacity    = '';
+                setTimeout(() => { entering.style.transition = ''; }, 270);
             }, 185);
         }
 
@@ -4266,17 +4230,8 @@
             at: Date.now()
         };
 
-        // Surgical DOM update — avoid full re-render just for receipt icon change
-        if (panelOpen) {
-            const def = RECEIPT_STATES[state] || RECEIPT_STATES.sent;
-            const tip = note || def.label;
-            const receiptEl = jQuery(`.et-message[data-index="${msgIndex}"] .et-read-receipt`);
-            if (receiptEl.length) {
-                receiptEl.attr('class', `et-read-receipt et-read-receipt-${state}`)
-                    .attr('title', tip)
-                    .html(`<i class="fa-solid ${def.icon}"></i>`);
-            }
-        }
+        // Re-render just that message rather than the whole chat
+        if (panelOpen) refreshMessages(history);
 
         return history;
     }
@@ -5712,15 +5667,14 @@
     // keyword-based auto-reaction, which is shown the same way.
 
     /**
-     * Updates the character reaction pill under a user bubble in the DOM.
-     * Called both during initial render (for persisted reactions) and live
-     * when a new reaction is added/removed.
+     * Shows the character's reaction pill under a user message.
      *
-     * @param {number}      msgIndex   - message index
+     * @param {jQuery}      msgEl      - the user message's element
      * @param {string|null} reactionId - FA_REACTIONS id, or null to clear
+     * @param {boolean}     animate    - play the pop-in (not when only re-rendering)
      */
-    function renderCharacterReaction(msgIndex, reactionId) {
-        const container = jQuery(`#et-char-reaction-${msgIndex}`);
+    function renderCharacterReaction(msgEl, reactionId, animate = true) {
+        const container = msgEl.find('[data-et-role~="char-reaction"]');
         if (!container.length) return;
 
         container.empty();
@@ -5730,14 +5684,14 @@
         if (!reactDef) return;
 
         const pill = jQuery(`
-            <div class="et-char-reaction-pill et-reaction-new" style="--react-color:${reactDef.color}" title="${reactDef.label}">
+            <div class="et-char-reaction-pill${animate ? ' et-reaction-new' : ''}" style="--react-color:${reactDef.color}" title="${reactDef.label}">
                 <i class="${reactDef.icon} et-char-reaction-icon"></i>
             </div>
         `);
         container.append(pill);
 
         // Remove the pop-in animation class after it plays so it doesn't replay on DOM mutations
-        setTimeout(() => pill.removeClass('et-reaction-new'), 450);
+        if (animate) setTimeout(() => pill.removeClass('et-reaction-new'), 450);
     }
 
     function updateEmotionIndicator() {
@@ -5872,7 +5826,7 @@
     /** A photo shows only its frame; tapping it reveals the description inside. */
     function buildPhotoCardHtml(desc) {
         const safeDesc = escapeHtml(desc);
-        return `<div class="et-photo-card" role="button" tabindex="0" aria-expanded="false" title="Tap to view" data-et-action="photo-toggle"><div class="et-photo-card-frame"><i class="fa-regular fa-image et-photo-card-icon"></i><div class="et-photo-card-caption"><span>${safeDesc || 'Photo'}</span></div></div></div>`;
+        return `<div class="et-photo-card" role="button" tabindex="0" aria-expanded="false" title="Tap to view" data-et-action="photo-toggle"><div class="et-photo-card-frame"><i class="fa-regular fa-image et-photo-card-icon"></i><div class="et-photo-card-caption" data-et-role="caption"><span>${safeDesc || 'Photo'}</span></div></div></div>`;
     }
 
     /** A transfer or transfer-response card, from a view-model part (its status and display amount). */
@@ -5898,7 +5852,7 @@
         if (part.type === 'photo') return buildPhotoCardHtml(part.desc);
         if (part.type === 'reaction_note') return buildReactionNoteHtml(part.reaction);
         if (part.type !== 'text') return buildTransferCardHtml(part);
-        return `<div class="et-bubble-text">${formatMessageText(part.text)}</div>`;
+        return `<div class="et-bubble-text" data-et-role="text">${formatMessageText(part.text)}</div>`;
     }
 
     /** Extra bubble classes for a part: cards get a snug, card-hugging bubble. */
@@ -5915,7 +5869,7 @@
      */
     function buildLeadingPartBubblesHtml(view, sideClass) {
         return view.parts.slice(0, -1).map((part, j) =>
-            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}">${buildPartContentHtml(part)}<button class="et-part-dots-btn" data-et-action="part-menu" data-index="${view.index}" data-part="${j}" data-is-user="${view.isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
+            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}" data-et-role="bubble">${buildPartContentHtml(part)}<button class="et-part-dots-btn" data-et-action="part-menu" data-index="${view.index}" data-part="${j}" data-is-user="${view.isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
         ).join('');
     }
 
@@ -5953,7 +5907,7 @@
      * message is re-rendered mid-sequence (the re-render shows every bubble).
      */
     function staggerRevealParts(msgEl) {
-        const bubbles = msgEl.find('.et-message-body > .et-bubble');
+        const bubbles = msgEl.find('[data-et-role~="bubble"]');
         if (bubbles.length < 2) return;
         bubbles.slice(1).hide();
 
@@ -5969,7 +5923,7 @@
             const typing = jQuery('<div class="et-bubble et-bubble-char et-typing-bubble"><div class="et-typing-dots"><span></span><span></span><span></span></div></div>');
             bubbles.eq(next - 1).after(typing);
             scrollToEnd();
-            const length = bubble.find('.et-bubble-text, .et-photo-card-caption').text().trim().length;
+            const length = bubble.find('[data-et-role~="text"], [data-et-role~="caption"]').text().trim().length;
             setTimeout(() => {
                 typing.remove();
                 if (!msgEl[0].isConnected) return;
@@ -6292,6 +6246,177 @@
         return `<span class="et-read-receipt et-read-receipt-${receipt.state}" title="${tip}"><i class="fa-solid ${def.icon}"></i></span>`;
     }
 
+    // The view of each message on screen, by index, so refreshMessages() replaces only what changed
+    let renderedViews = new Map();
+
+    /** View-model options for the chat on screen. */
+    function getChatViewOptions() {
+        return {
+            charName: getCharacterName(),
+            userName: getUserName(),
+            reactionIds: getReactionIds(),
+            combineMode: !!(groupManager && groupManager.isGroupSession() && groupManager.isCombineMode()),
+            swipes: !!settings.swipedMessages,
+            memoryHighlights: !!(settings.memoryEnabled && settings.memoryAutoExtract),
+        };
+    }
+
+    /** What message templates need besides the message's own view. */
+    function getMessageRenderContext() {
+        // Verbosity indicator
+        const charKey = getCharacterKey();
+        const verbosity = charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null;
+        const verbosityLabels = { short: '📏', medium: '📋', long: '📜' };
+        const verbosityTooltips = {
+            short: 'Short: 1–2 texts per reply',
+            medium: 'Medium: 2–4 texts per reply',
+            long: 'Long: 4–7 texts per reply'
+        };
+        const verbosityBadge = verbosity && verbosity !== 'medium'
+            ? `<span class="et-verbosity-badge" title="${verbosityTooltips[verbosity] || 'Verbosity'}">${verbosityLabels[verbosity] || ''}</span>` : '';
+        return { showAvatar: settings.showAvatar !== false, verbosityBadge };
+    }
+
+    /** Markup for one message, from its view-model entry. */
+    function buildMessageHtml(m, { showAvatar, verbosityBadge }) {
+        const { DOMPurify } = SillyTavern.libs;
+        const index = m.index;
+        const mainPart = m.parts[m.parts.length - 1];
+        const mainCardClass = partBubbleClass(mainPart);
+        const msgDate = new Date(m.timestamp || Date.now());
+        const time = msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        const fullDateToolip = msgDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+        let html;
+        if (m.isUser) {
+            const safeUserName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
+            html = `
+            <div class="et-message et-message-user${m.groupedWithNext ? ' et-message-grouped' : ''}" data-et-role="message" data-index="${index}">
+                ${buildLeadingPartBubblesHtml(m, 'et-bubble-user')}
+                <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}" data-et-role="bubble main">
+                    ${buildPartContentHtml(mainPart)}
+                    ${m.groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
+                    <div class="et-message-footer">
+                        <span class="et-message-time" title="${fullDateToolip}">${time}</span>
+                        <span class="et-user-name">${safeUserName}</span>
+                        ${buildReceiptHtml(m.receipt)}
+                        <div class="et-bubble-actions">
+                            <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class="et-char-reaction-bar" id="et-char-reaction-${index}" data-et-role="char-reaction"></div>
+            </div>`;
+        } else {
+            // Combine mode: each character message carries its own name + avatar
+            const safeCharName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
+            let avatarHtml = '';
+            if (showAvatar) {
+                const member = m.charKey && groupManager ? groupManager.getGroupMemberByKey(m.charKey) : null;
+                avatarHtml = member
+                    ? groupManager.buildAvatarHtmlForChar(member, 'et-bubble-avatar et-bubble-avatar-footer', '', true)
+                    : buildAvatarHtml(m.senderName, 'et-bubble-avatar et-bubble-avatar-footer', '', true);
+            }
+
+            // Swipe navigation — only on the last character message
+            const swipe = m.swipe;
+            const swipeNavHtml = swipe ? `
+                        <div class="et-swipe-nav">
+                            <button class="et-swipe-btn et-swipe-prev" data-et-action="swipe-prev" data-index="${index}" title="Previous version"${swipe.index === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
+                            <span class="et-swipe-counter">${swipe.index + 1} / ${swipe.count}</span>
+                            <button class="et-swipe-btn et-swipe-next${swipe.isLast ? ' et-swipe-regen' : ''}" data-et-action="swipe-next" data-index="${index}" title="${swipe.isLast ? 'Regenerate (new version)' : 'Next version'}"><i class="fa-solid fa-chevron-right"></i></button>
+                        </div>` : '';
+
+            html = `
+            <div class="et-message et-message-char" data-et-role="message" data-index="${index}">
+                <div class="et-message-body">
+                    ${buildLeadingPartBubblesHtml(m, 'et-bubble-char')}
+                    <div class="et-bubble et-bubble-char et-bubble-main${mainCardClass}" data-et-role="bubble main">
+                        ${buildPartContentHtml(mainPart)}
+                        ${buildImageAttachmentHtml(m)}
+                        ${swipeNavHtml}
+                        <div class="et-message-footer">
+                            <div class="et-char-info-pill${showAvatar ? '' : ' et-pill-no-avatar'}">
+                                ${avatarHtml}
+                                <span class="et-footer-name" title="${safeCharName}">${safeCharName}</span>
+                            </div>
+                            <span class="et-message-time" title="${fullDateToolip}">${time}</span>
+                            ${verbosityBadge}
+                            <div class="et-bubble-actions">
+                                <button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>
+                                <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="et-bubble-reactions-bar" id="et-reactions-bar-${index}">
+                        <div class="et-active-reactions" id="et-reactions-${index}" data-et-role="reactions"></div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        return html;
+    }
+
+    /** A rendered message's element, by history index. */
+    function findMessageElement(msgIndex) {
+        return jQuery(`#et-messages-inner [data-et-role~="message"][data-index="${msgIndex}"]`);
+    }
+
+    /** What a message's markup doesn't carry: its arrival sequence, memory marks and reaction pills. */
+    function decorateMessage(msgEl, m, { animateReaction = true } = {}) {
+        if (shouldStaggerReveal(m)) {
+            staggerRevealParts(msgEl);
+        }
+
+        if (m.memoryHighlights.length) {
+            try { applyMemoryHighlights(msgEl, m); } catch (e) { /* ignore */ }
+        }
+
+        if (!m.isUser) {
+            renderStoredReactions(msgEl, m.reactions);
+        }
+
+        if (m.charReaction) {
+            renderCharacterReaction(msgEl, m.charReaction, animateReaction);
+        }
+    }
+
+    /**
+     * Re-renders in place every message on screen whose view changed — after a
+     * reaction, read receipt or swipe. Each is replaced whole and marked
+     * data-et-refreshed so its entrance animation doesn't replay; open photos stay
+     * open. Adding or removing messages still takes renderMessages().
+     */
+    function refreshMessages(history) {
+        if (!Array.isArray(history) || !history.length) return;
+        const inner = jQuery('#et-messages-inner');
+        if (!inner.length) return;
+
+        const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions());
+        let ctx = null;
+        for (const m of view.messages) {
+            const signature = JSON.stringify(m);
+            const prev = renderedViews.get(m.index);
+            if (prev?.signature === signature) continue;
+            const oldEl = findMessageElement(m.index);
+            if (!oldEl.length) continue;
+
+            ctx = ctx || getMessageRenderContext();
+            const expanded = oldEl.find('[aria-expanded]').map((i, el) => el.getAttribute('aria-expanded')).get();
+            const msgEl = jQuery(buildMessageHtml(m, ctx).trim()).attr('data-et-refreshed', '');
+            msgEl.find('[aria-expanded]').each((i, el) => {
+                if (expanded[i]) el.setAttribute('aria-expanded', expanded[i]);
+            });
+            oldEl.replaceWith(msgEl);
+            decorateMessage(msgEl, m, { animateReaction: m.charReaction !== prev?.charReaction });
+            if (settings.swipedMessages && isMobileDevice() && m.index === view.lastCharIndex) {
+                bindBubbleTouchSwipe(inner, m.index);
+            }
+            renderedViews.set(m.index, { signature, charReaction: m.charReaction });
+        }
+    }
+
     // Track which delete button is pending 2nd click
     let deleteConfirmIndex = -1;
     let deleteConfirmTimer = null;
@@ -6304,6 +6429,7 @@
         const savedScrollTop = (preserveScroll && messagesEl) ? messagesEl.scrollTop : null;
 
         inner.empty();
+        renderedViews = new Map();
 
         if (!history || history.length === 0) {
             const char = getCurrentCharacter();
@@ -6312,123 +6438,14 @@
             return;
         }
 
-        const { DOMPurify } = SillyTavern.libs;
         const charName = getCharacterName();
-        const showAvatar = settings.showAvatar !== false;
-        const view = ChatViewModel.buildChatViewModel(history, {
-            charName,
-            userName: getUserName(),
-            reactionIds: getReactionIds(),
-            combineMode: !!(groupManager && groupManager.isGroupSession() && groupManager.isCombineMode()),
-            swipes: !!settings.swipedMessages,
-            memoryHighlights: !!(settings.memoryEnabled && settings.memoryAutoExtract),
-        });
-
-        // Verbosity indicator
-        const charKey = getCharacterKey();
-        const verbosity = charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null;
-        const verbosityLabels = { short: '📏', medium: '📋', long: '📜' };
-        const verbosityTooltips = {
-            short: 'Short: 1–2 texts per reply',
-            medium: 'Medium: 2–4 texts per reply',
-            long: 'Long: 4–7 texts per reply'
-        };
-        const verbosityBadge = verbosity && verbosity !== 'medium'
-            ? `<span class="et-verbosity-badge" title="${verbosityTooltips[verbosity] || 'Verbosity'}">${verbosityLabels[verbosity] || ''}</span>` : '';
-
+        const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions());
+        const ctx = getMessageRenderContext();
+        renderedViews = new Map();
         view.messages.forEach((m) => {
-            const index = m.index;
-            const mainPart = m.parts[m.parts.length - 1];
-            const mainCardClass = partBubbleClass(mainPart);
-            const msgDate = new Date(m.timestamp || Date.now());
-            const time = msgDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-            const fullDateToolip = msgDate.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
-
-            let bubbleHtml;
-            if (m.isUser) {
-                const safeUserName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
-                bubbleHtml = `
-                <div class="et-message et-message-user${m.groupedWithNext ? ' et-message-grouped' : ''}" data-index="${index}">
-                    ${buildLeadingPartBubblesHtml(m, 'et-bubble-user')}
-                    <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}">
-                        ${buildPartContentHtml(mainPart)}
-                        ${m.groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
-                        <div class="et-message-footer">
-                            <span class="et-message-time" title="${fullDateToolip}">${time}</span>
-                            <span class="et-user-name">${safeUserName}</span>
-                            ${buildReceiptHtml(m.receipt)}
-                            <div class="et-bubble-actions">
-                                <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="et-char-reaction-bar" id="et-char-reaction-${index}"></div>
-                </div>`;
-            } else {
-                // Combine mode: each character message carries its own name + avatar
-                const safeCharName = DOMPurify.sanitize(m.senderName, { ALLOWED_TAGS: [] });
-                let avatarHtml = '';
-                if (showAvatar) {
-                    const member = m.charKey && groupManager ? groupManager.getGroupMemberByKey(m.charKey) : null;
-                    avatarHtml = member
-                        ? groupManager.buildAvatarHtmlForChar(member, 'et-bubble-avatar et-bubble-avatar-footer', '', true)
-                        : buildAvatarHtml(m.senderName, 'et-bubble-avatar et-bubble-avatar-footer', '', true);
-                }
-
-                // Swipe navigation — only on the last character message
-                const swipe = m.swipe;
-                const swipeNavHtml = swipe ? `
-                            <div class="et-swipe-nav">
-                                <button class="et-swipe-btn et-swipe-prev" data-et-action="swipe-prev" data-index="${index}" title="Previous version"${swipe.index === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
-                                <span class="et-swipe-counter">${swipe.index + 1} / ${swipe.count}</span>
-                                <button class="et-swipe-btn et-swipe-next${swipe.isLast ? ' et-swipe-regen' : ''}" data-et-action="swipe-next" data-index="${index}" title="${swipe.isLast ? 'Regenerate (new version)' : 'Next version'}"><i class="fa-solid fa-chevron-right"></i></button>
-                            </div>` : '';
-
-                bubbleHtml = `
-                <div class="et-message et-message-char" data-index="${index}">
-                    <div class="et-message-body">
-                        ${buildLeadingPartBubblesHtml(m, 'et-bubble-char')}
-                        <div class="et-bubble et-bubble-char et-bubble-main${mainCardClass}">
-                            ${buildPartContentHtml(mainPart)}
-                            ${buildImageAttachmentHtml(m)}
-                            ${swipeNavHtml}
-                            <div class="et-message-footer">
-                                <div class="et-char-info-pill${showAvatar ? '' : ' et-pill-no-avatar'}">
-                                    ${avatarHtml}
-                                    <span class="et-footer-name" title="${safeCharName}">${safeCharName}</span>
-                                </div>
-                                <span class="et-message-time" title="${fullDateToolip}">${time}</span>
-                                ${verbosityBadge}
-                                <div class="et-bubble-actions">
-                                    <button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>
-                                    <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="et-bubble-reactions-bar" id="et-reactions-bar-${index}">
-                            <div class="et-active-reactions" id="et-reactions-${index}"></div>
-                        </div>
-                    </div>
-                </div>`;
-            }
-
-            inner.append(bubbleHtml);
-
-            if (shouldStaggerReveal(m)) {
-                staggerRevealParts(inner.children().last());
-            }
-
-            if (m.memoryHighlights.length) {
-                try { applyMemoryHighlights(inner.children().last(), m); } catch (e) { /* ignore */ }
-            }
-
-            if (!m.isUser) {
-                renderStoredReactions(index, m.reactions);
-            }
-
-            if (m.charReaction) {
-                renderCharacterReaction(index, m.charReaction);
-            }
+            inner.append(buildMessageHtml(m, ctx));
+            decorateMessage(inner.children().last(), m);
+            renderedViews.set(m.index, { signature: JSON.stringify(m), charReaction: m.charReaction });
         });
 
         if (showTypingIndicator) {
@@ -6932,11 +6949,11 @@
 
     /**
      * Shows the user's tapbacks under a character message.
-     * @param {number} msgIndex
+     * @param {jQuery} msgEl - the character message's element
      * @param {Array<{id: string, count: number, mine: boolean}>} reactions - see ChatViewModel.getStoredReactions
      */
-    function renderStoredReactions(msgIndex, reactions) {
-        const container = jQuery(`#et-reactions-${msgIndex}`);
+    function renderStoredReactions(msgEl, reactions) {
+        const container = msgEl.find('[data-et-role~="reactions"]');
         if (!container.length) return;
 
         container.empty();
@@ -6997,12 +7014,12 @@
 
         saveChatHistory(history);
 
-        // Update DOM in-place to prevent flicker
-        renderStoredReactions(msgIndex, ChatViewModel.getStoredReactions(msg, getReactionIds()));
+        // Re-render just this message
+        refreshMessages(history);
 
         // Smoothly scroll the reaction bar into view
         setTimeout(() => {
-            const reactionBar = document.getElementById(`et-reactions-bar-${msgIndex}`);
+            const reactionBar = findMessageElement(msgIndex).find('[data-et-role~="reactions"]')[0];
             if (reactionBar) {
                 reactionBar.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
@@ -7262,7 +7279,7 @@
     function applyMemoryHighlights(bubbleEl, msg) {
         if (!bubbleEl || !msg.memoryHighlights || !msg.memoryHighlights.length) return;
         const style      = (settings.memoryHighlightStyle || 'underline');
-        const bubbleText = bubbleEl.find('.et-bubble-text')[0];
+        const bubbleText = bubbleEl.find('[data-et-role~="text"]')[0];
         if (!bubbleText) return;
         msg.memoryHighlights.forEach(function (hl) {
             try { _highlightTextNode(bubbleText, hl.text, hl.category, hl.label, style); } catch (e) { /* ignore */ }

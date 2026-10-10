@@ -10635,6 +10635,11 @@ details.et-te-advanced[open] .et-te-advanced-toggle::before { transform: rotate(
     animation: et-msg-rise 0.32s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Messages re-rendered in place (a reaction, receipt or swipe changed) don't rise again */
+.et-message[data-et-refreshed] {
+    animation: none;
+}
+
 @keyframes et-msg-rise {
     from {
         opacity: 0;
