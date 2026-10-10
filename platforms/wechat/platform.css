@@ -306,11 +306,6 @@
 
 [data-platform="wechat"] #et-attach-btn::before {
     --wx-glyph: var(--wx-icon-add);
-    transition: transform 0.18s ease;
-}
-
-[data-platform="wechat"] #et-attach-btn.et-attach-open::before {
-    transform: rotate(45deg);
 }
 
 [data-platform="wechat"] #et-attach-btn > i {
@@ -780,4 +775,63 @@
 [data-platform="wechat"] .wx-swipe button:disabled {
     opacity: 0.35;
     cursor: default;
+}
+
+/* ── "+" panel (box-im chat-box.vue: .chat-tab-bar / .chat-tools) ──
+   Rises under the input bar; tiles four to a row, a rounded square with the
+   label under it. Sizes from WeChat's own panel. */
+
+/* Core animates the height from 0 (and back), so the input bar and the tiles
+   rise as one; the padding lives on the list so the panel can fold to nothing */
+[data-platform="wechat"] .et-attach-panel {
+    flex-shrink: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    border-top: 0.5px solid var(--wx-input-border);
+    background: var(--wx-input-surface);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    transition: height 0.2s ease-out;
+}
+
+[data-platform="wechat"] .et-attach-panel-list {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 16px 12px max(env(safe-area-inset-bottom, 0px), 12px);
+}
+
+[data-platform="wechat"] .et-attach-panel-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 25%;
+    padding: 0 0 8px;
+    border: 0;
+    background: none;
+    cursor: pointer;
+}
+
+[data-platform="wechat"] .et-attach-panel-icon {
+    display: grid;
+    place-items: center;
+    width: 60px;
+    height: 60px;
+    border-radius: 14px;
+    color: var(--wx-text);
+    background: var(--wx-bubble-in);
+    font-size: 26px;
+}
+
+[data-platform="wechat"] .et-attach-panel-icon i {
+    opacity: 0.85;
+}
+
+[data-platform="wechat"] .et-attach-panel-item:active .et-attach-panel-icon {
+    background: color-mix(in srgb, var(--wx-bubble-in) 85%, var(--wx-text));
+}
+
+[data-platform="wechat"] .et-attach-panel-label {
+    margin-top: 8px;
+    color: var(--wx-muted);
+    font-size: 12px;
+    line-height: 16px;
 }

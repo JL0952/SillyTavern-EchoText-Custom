@@ -5193,6 +5193,8 @@
         jQuery('#et-send-btn').on('click', handleSend);
 
         composeMode = null;
+        bindAttachPanel();
+
         // "+" opens the attach menu; while composing a photo/transfer it cancels instead
         jQuery('#et-attach-btn').on('click', function (e) {
             e.stopPropagation();
@@ -5495,6 +5497,10 @@
 
     /** Opens the attach menu (Photo / Transfer) above the "+" button, styled like the message menu. */
     function toggleAttachMenu(btn) {
+        if (getActivePlatform().composerPanel) {
+            toggleAttachPanel();
+            return;
+        }
         if (jQuery('.et-attach-menu').length) {
             closeAllDotMenus();
             return;
@@ -5535,6 +5541,74 @@
             setComposeMode(mode);
             jQuery('#et-input').trigger('focus');
         });
+    }
+
+    /**
+     * The attach entries as a panel that rises under the input bar, for platforms
+     * whose "+" works that way (`composerPanel`, WeChat). Ported from box-im's
+     * .chat-tab-bar / .chat-tools: a row of tiles, the message list gives up
+     * the room, and it closes on "+" again, a tile, the message list or the input.
+     */
+    function toggleAttachPanel() {
+        if (jQuery('#et-attach-panel').length) {
+            closeAttachPanel();
+            return;
+        }
+        closeAllDotMenus();
+        const looks = getActivePlatform().composerPanel;
+        const tiles = Object.entries(Features.getComposerModes(getActiveFeatures())).map(([id, mode]) => {
+            const look = { ...mode, ...looks[id] };
+            return `<button class="et-attach-panel-item" type="button" data-mode="${id}"><span class="et-attach-panel-icon"><i class="fa-solid ${look.icon}"></i></span><span class="et-attach-panel-label">${escapeHtml(look.label)}</span></button>`;
+        }).join('');
+        if (!tiles) return;
+        const panel = jQuery(`<div class="et-attach-panel" id="et-attach-panel" data-et-role="attach-panel"><div class="et-attach-panel-list">${tiles}</div></div>`);
+        jQuery('#et-panel [data-et-role~="input-bar"]').after(panel);
+        // Grows from nothing (paced by the platform's height transition), so the
+        // input bar and the tiles rise together
+        const fullHeight = panel.outerHeight();
+        panel.css('height', '0px');
+        void panel[0].offsetHeight;
+        panel.css('height', fullHeight + 'px');
+        followAttachPanel(panel);
+    }
+
+    /** A tile picks its mode; tapping the message list or the input puts the panel away. */
+    function bindAttachPanel() {
+        jQuery('#et-panel').on('click', '#et-attach-panel .et-attach-panel-item', function (e) {
+            e.stopPropagation();
+            const mode = jQuery(this).data('mode');
+            closeAttachPanel();
+            setComposeMode(mode);
+            jQuery('#et-input').trigger('focus');
+        }).on('click', '[data-et-role~="messages"]', closeAttachPanel)
+            .on('focus', '#et-input', closeAttachPanel);
+    }
+
+    function closeAttachPanel() {
+        const panel = jQuery('#et-attach-panel');
+        if (!panel.length) return;
+        // Shrinks away the same way, then goes; a new "+" meanwhile opens a fresh one
+        panel.removeAttr('id').css('height', '0px');
+        followAttachPanel(panel);
+        setTimeout(() => panel.remove(), 250);
+    }
+
+    /**
+     * While the panel's height animates, the message list keeps its distance
+     * from the bottom, so its last lines move with the input bar.
+     */
+    function followAttachPanel(panel) {
+        const messagesEl = document.getElementById('et-messages');
+        if (!messagesEl) return;
+        const fromBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight;
+        const until = performance.now() + 320;
+        const step = (now) => {
+            messagesEl.style.scrollBehavior = 'auto';
+            messagesEl.scrollTop = messagesEl.scrollHeight - messagesEl.clientHeight - fromBottom;
+            messagesEl.style.scrollBehavior = '';
+            if (now < until && panel[0].isConnected) requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
     }
 
     /** Accept / Decline menu for a pending transfer from the character, anchored to its card. */
@@ -6253,6 +6327,7 @@
         const modes = Features.getComposerModes(platform.features);
         jQuery('#et-attach-btn').toggle(Object.keys(modes).length > 0);
         if (composeMode && !modes[composeMode]) setComposeMode(null);
+        if (!platform.composerPanel) closeAttachPanel();
         populatePlatformSelects();
     }
 

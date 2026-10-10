@@ -146,6 +146,11 @@
         name: '微信 WeChat',
         features: ['photo', 'transfer'],
         stylesheet: 'platform.css',
+        // "+" raises a panel of tiles (lib/features.js composer entries), labelled the WeChat way
+        composerPanel: {
+            photo: { label: '照片', icon: 'fa-image' },
+            transfer: { label: '转账', icon: 'fa-right-left' },
+        },
         templates: {
             message,
             part,
