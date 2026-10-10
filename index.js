@@ -30,6 +30,11 @@
     if (!BASE_URL) {
         BASE_URL = '/scripts/extensions/third-party/SillyTavern-EchoText';
     }
+    // SillyTavern loads index.js without a version: give the files EchoText loads
+    // itself one per page load, so a browser never keeps a stylesheet or module
+    // from before an update (a platform stylesheet goes in after page load, when a
+    // hard reload no longer bypasses the cache)
+    if (!VERSION_QUERY) VERSION_QUERY = `?t=${Date.now()}`;
 
     console.log(`[EchoText] Initializing from ${BASE_URL} with query ${VERSION_QUERY}`);
 
@@ -76,7 +81,7 @@
     // Platform packs (platforms/<id>/platform.js), in menu order. Their scripts are
     // small and all load now; a pack's stylesheet loads only while it's in use.
     // EchoText's own look must load, the others are optional.
-    const PLATFORM_IDS = ['echotext', 'wechat', 'test-noreact'];
+    const PLATFORM_IDS = ['echotext', 'wechat'];
     for (const id of PLATFORM_IDS) {
         try {
             if (!window.EchoTextPlatforms?.[id]) runEchoTextScript(`platforms/${id}/platform.js`);
@@ -500,7 +505,6 @@
         jQuery('#et_paragraph_spacing').val(settings.paragraphSpacing || 12);
         jQuery('#et_paragraph_spacing_val').text((settings.paragraphSpacing || 12) + 'px');
 
-        jQuery('#et_show_avatar').prop('checked', settings.showAvatar !== false);
         jQuery('#et_emotion_system').prop('checked', settings.emotionSystemEnabled !== false);
         jQuery('#et_swiped_messages').prop('checked', settings.swipedMessages === true);
         jQuery('#et_fab_size').val(settings.fabSize);
@@ -556,7 +560,6 @@
         jQuery('#et_auto_open_panel').prop('checked', settings.autoOpenOnReload);
         jQuery('#et_auto_load_last_char_panel').prop('checked', settings.autoLoadLastCharacter === true);
         jQuery('#et_auto_scroll_panel').prop('checked', settings.autoScroll);
-        jQuery('#et_show_avatar_panel').prop('checked', settings.showAvatar !== false);
         jQuery('#et_emotion_system_panel').prop('checked', settings.emotionSystemEnabled !== false);
         jQuery('#et_swiped_messages_panel').prop('checked', settings.swipedMessages === true);
         jQuery('#et_verbosity_default_panel').val(settings.verbosityDefault || 'medium');
@@ -876,19 +879,6 @@
             saveSettings();
             // Sync with modal
             jQuery('#et_verbosity_default').val(settings.verbosityDefault);
-        });
-
-        // Show avatar
-        jQuery('#et_show_avatar_panel').off('change.panel').on('change.panel', function () {
-            settings.showAvatar = jQuery(this).is(':checked');
-            saveSettings();
-            // Sync with modal
-            jQuery('#et_show_avatar').prop('checked', settings.showAvatar);
-            // Update messages to show/hide bubble avatars
-            if (panelOpen) {
-                const history = getChatHistory();
-                renderMessages(history);
-            }
         });
 
         // Emotion system toggle (panel)
@@ -4629,9 +4619,6 @@
         const escapedInitial = escapeHtml(initial);
         const idAttr = id ? ` id="${id}"` : '';
         const sizeClass = small ? 'et-char-avatar-small' : 'et-char-avatar';
-        // Only apply hidden class to bubble avatars, not header avatars
-        const isBubbleAvatar = extraClass && extraClass.includes('et-bubble-avatar');
-        const hiddenClass = (settings.showAvatar === false && isBubbleAvatar) ? ' et-avatar-hidden' : '';
 
         // Derive initial-circle background from name (same palette as character picker)
         const bgColor = _pickerAvatarBg ? _pickerAvatarBg(charName) : 'var(--et-theme-color)';
@@ -4639,7 +4626,7 @@
         // Special placeholder when no character is loaded (name is the fallback 'Character' and no image)
         const isNoChar = !getCurrentCharacter();
         if (isNoChar && !avatarUrl && !small) {
-            return `<div class="${sizeClass} et-no-char-avatar et-echo-logo${hiddenClass}${extraClass ? ' ' + extraClass : ''}"${idAttr} title="EchoText"><svg width="62%" height="62%" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="4" width="2.6" height="16" rx="1.3" fill="rgba(255,255,255,0.92)"/><rect x="5" y="4" width="13.5" height="2.6" rx="1.3" fill="rgba(255,255,255,0.92)"/><rect x="5" y="10.7" width="10.5" height="2.6" rx="1.3" fill="rgba(255,255,255,0.92)"/><rect x="5" y="17.4" width="13.5" height="2.6" rx="1.3" fill="rgba(255,255,255,0.92)"/></svg></div>`;
+            return `<div class="${sizeClass} et-no-char-avatar et-echo-logo${extraClass ? ' ' + extraClass : ''}"${idAttr} title="EchoText"><svg width="62%" height="62%" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="5" y="4" width="2.6" height="16" rx="1.3" fill="rgba(255,255,255,0.92)"/><rect x="5" y="4" width="13.5" height="2.6" rx="1.3" fill="rgba(255,255,255,0.92)"/><rect x="5" y="10.7" width="10.5" height="2.6" rx="1.3" fill="rgba(255,255,255,0.92)"/><rect x="5" y="17.4" width="13.5" height="2.6" rx="1.3" fill="rgba(255,255,255,0.92)"/></svg></div>`;
         }
 
         if (avatarUrl) {
@@ -4647,7 +4634,7 @@
             // After the image loads we canvas-fingerprint it — if it matches the ST default
             // silhouette (near-black or grey-purple [149,127,143] at px 50,50) we remove the
             // image and reveal the styled initial circle underneath.
-            const html = `<div class="${sizeClass}${hiddenClass}${extraClass ? ' ' + extraClass : ''}"${idAttr} style="background:${bgColor};">
+            const html = `<div class="${sizeClass}${extraClass ? ' ' + extraClass : ''}"${idAttr} style="background:${bgColor};">
                 <span class="et-char-avatar-initial" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1rem;color:#fff;border-radius:50%;pointer-events:none;">${escapedInitial}</span>
                 <img src="${avatarUrl}" alt="${escapedInitial}" class="et-avatar-img" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.remove();">
             </div>`;
@@ -4657,7 +4644,7 @@
             }, 0);
             return html;
         }
-        return `<div class="${sizeClass}${hiddenClass}${extraClass ? ' ' + extraClass : ''}"${idAttr} style="background:${bgColor};position:relative;">
+        return `<div class="${sizeClass}${extraClass ? ' ' + extraClass : ''}"${idAttr} style="background:${bgColor};position:relative;">
             <span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1rem;color:#fff;">${escapedInitial}</span>
         </div>`;
     }
@@ -6428,7 +6415,6 @@
         const { DOMPurify } = SillyTavern.libs;
         const charKey = getCharacterKey();
         return {
-            showAvatar: settings.showAvatar !== false,
             verbosity: charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null,
             charName: getCharacterName(),
             animateReaction: true,
@@ -6512,7 +6498,7 @@
     let renderedFrame = null;
 
     function getRenderFrame(platform, ctx) {
-        return JSON.stringify([platform.id, platform.features, getCharacterKey(), ctx.charName, ctx.showAvatar, ctx.verbosity, ctx.groupChat,
+        return JSON.stringify([platform.id, platform.features, getCharacterKey(), ctx.charName, ctx.verbosity, ctx.groupChat,
             getUserAvatarUrl(), getCharAvatarUrl(), settings.memoryHighlightStyle]);
     }
 
@@ -6807,7 +6793,9 @@
         // Already editing?
         if (oldEl.find('[contenteditable="true"]').length) return;
 
-        const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions()).messages[msgIndex];
+        // By history index: hidden messages (e.g. reaction-only replies on WeChat) leave gaps in the list
+        const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions()).messages.find(m => m.index === msgIndex);
+        if (!view) return;
         const html = getActivePlatform().templates.message({ ...view, parts: [{ type: 'text', text: '' }] },
             { ...getMessageRenderContext(), animateReaction: false });
         const msgEl = jQuery(html.trim()).attr('data-et-refreshed', '');

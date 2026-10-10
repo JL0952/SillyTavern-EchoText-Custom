@@ -1,0 +1,145 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Attach panel test</title>
+<link rel="stylesheet" href="build/vendor/css/fontawesome.min.css">
+<link rel="stylesheet" href="build/vendor/css/solid.min.css">
+<link rel="stylesheet" href="../../style.css">
+<style>
+    body { background: #1b1d2b; margin: 0; }
+    #et-panel { position: fixed !important; left: 16px !important; top: 10px !important; width: 380px !important; height: 600px !important;
+        opacity: 1 !important; transform: none !important; display: flex !important; flex-direction: column; }
+    #et-panel .et-panel-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+</style>
+</head><body>
+<div id="host"></div>
+<script src="build/vendor/jquery-3.5.1.min.js"></script>
+<script src="build/vendor/purify.min.js"></script>
+<script>window.SillyTavern = { libs: { DOMPurify: window.DOMPurify } };</script>
+<script src="../../lib/rich-messages.js"></script>
+<script src="../../lib/features.js"></script>
+<script src="../../lib/chat-view-model.js"></script>
+<script src="../../platforms/echotext/platform.js"></script>
+<script src="../../platforms/wechat/platform.js"></script>
+<script src="scenarios.js"></script>
+<script src="build/bundle-chrome.js"></script>
+<script>
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const scheme = new URLSearchParams(location.search).get('scheme') || 'dark';
+const sc = window.EchoTextScenarios[0];
+const history = JSON.parse(JSON.stringify(sc.history));
+const calls = [];
+const env = { settings: { ...sc.settings, autoScroll: true, defaultPlatform: 'wechat' }, groupManager: null, FA_REACTIONS: window.EchoTextScenarioReactions,
+    showTypingIndicator: false, BASE_URL: '', VERSION_QUERY: '',
+    getCurrentCharacter: () => ({ name: 'Mira', avatar: 'mira.png' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+    getUserName: () => '我', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null, _pickerAvatarBg: () => '#7c6f9c',
+    isMobileDevice: () => false, getChatHistory: () => history, getUserAvatarUrl: () => null, isCombinedGroupMode: () => false,
+    setComposeMode: mode => calls.push(['setComposeMode', mode]),
+    closeAllDotMenus: () => jQuery('.et-attach-menu').remove() };
+const r = window.EchoTextHarness.chrome(env);
+document.getElementById('host').innerHTML = r.buildPanelHtml();
+r.bindAttachPanel();
+r.renderMessages(history);
+
+window.runPanelTest = async function () {
+    const el = document.getElementById('et-messages');
+    const panelEl = () => document.getElementById('et-attach-panel');
+    const plus = () => r.toggleAttachMenu(jQuery('#et-attach-btn'));   // what the "+" click handler calls
+    const res = {};
+    jQuery('#et-panel').attr('data-et-scheme', scheme);
+    el.scrollTop = el.scrollHeight;
+    await sleep(300);
+    const bottomGap = () => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
+
+    // 1. "+" opens the panel under the input bar, the list keeps its last lines
+    const gapBefore = bottomGap();
+    plus();
+    await sleep(250);
+    const p = panelEl();
+    res.opens = !!p && p.previousElementSibling?.matches('[data-et-role~="input-bar"]');
+    res.tiles = p ? [...p.querySelectorAll('.et-attach-panel-item')].map(t => `${t.dataset.mode}:${t.textContent.trim()}`) : [];
+    res.panelHeight = p ? Math.round(p.getBoundingClientRect().height) : 0;
+    res.stillAtBottom = bottomGap() <= gapBefore + 1;
+    res.insidePanel = p ? p.getBoundingClientRect().right <= document.getElementById('et-panel').getBoundingClientRect().right + 0.5 : false;
+    window.__shot = true;
+    await sleep(window.__hold || 0);
+
+    // 2. "+" again closes it
+    plus();
+    res.plusCloses = !panelEl();
+
+    // 3. a tile picks its mode and closes the panel; a panel still shrinking away ignores taps
+    plus(); await sleep(50);
+    res.closingPanels = document.querySelectorAll('.et-attach-panel:not(#et-attach-panel)').length;
+    jQuery('.et-attach-panel-item[data-mode="transfer"]').trigger('click');
+    res.tile = { calls: JSON.stringify(calls), closed: !panelEl(), inputFocused: document.activeElement?.id === 'et-input' };
+
+    // 4. tapping the message list closes it
+    document.getElementById('et-input').blur();
+    plus(); await sleep(50);
+    jQuery('#et-messages-inner').trigger('click');
+    res.messagesClose = !panelEl();
+
+    // 5. focusing the input closes it
+    plus(); await sleep(50);
+    document.getElementById('et-input').focus();
+    res.inputCloses = !panelEl();
+    document.getElementById('et-input').blur();
+
+    // 6. switching to a platform without a panel closes it; its "+" opens the popup menu
+    plus(); await sleep(50);
+    env.settings.defaultPlatform = 'echotext';
+    await sleep(0);
+    r.renderMessages(history);
+    res.switchCloses = !panelEl();
+    await sleep(0);
+    plus(); await sleep(50);
+    res.echotextUsesMenu = !panelEl() && !!document.querySelector('.et-attach-menu');
+    jQuery('.et-attach-menu').remove();
+    env.settings.defaultPlatform = 'wechat';
+    await sleep(0);
+    r.renderMessages(history);
+    return res;
+};
+
+// While the panel rises and falls, the message nearest the input bar keeps its
+// distance from it, and the list ends where it started — with the height
+// transition and without one (a browser that doesn't run it), at the end of the
+// list and scrolled up. Needs the Browser pane visible (animation frames).
+window.runAnchorTest = async function () {
+    const el = document.getElementById('et-messages');
+    const bar = document.querySelector('[data-et-role~="input-bar"]');
+    const cycle = async (scrolledUp) => {
+        el.style.scrollBehavior = 'auto';
+        el.scrollTop = el.scrollHeight - el.clientHeight - scrolledUp;
+        el.style.scrollBehavior = '';
+        await sleep(300);
+        const ref = [...document.querySelectorAll('#et-messages-inner [data-et-role~="message"]')]
+            .filter(m => m.getBoundingClientRect().bottom < bar.getBoundingClientRect().top).pop();
+        const gap = () => Math.round(bar.getBoundingClientRect().top - ref.getBoundingClientRect().bottom);
+        const startTop = el.scrollTop, gaps = [gap()];
+        const watch = async () => {
+            let on = true;
+            const tick = () => { gaps.push(gap()); if (on) requestAnimationFrame(tick); };
+            r.toggleAttachMenu(jQuery('#et-attach-btn'));
+            requestAnimationFrame(tick);
+            await sleep(500);
+            on = false;
+        };
+        await watch();   // open
+        await watch();   // close
+        const spread = Math.max(...gaps) - Math.min(...gaps);
+        return { spread, drift: Math.round(el.scrollTop - startTop), ok: spread <= 2 && Math.abs(el.scrollTop - startTop) <= 1 };
+    };
+    const res = {};
+    const off = document.createElement('style');
+    off.textContent = '[data-platform="wechat"] .et-attach-panel { transition: none !important; }';
+    for (const transition of [true, false]) {
+        if (!transition) document.head.appendChild(off);
+        for (const up of [0, 300]) res[`${transition ? 'animated' : 'no transition'}, scrolled up ${up}px`] = await cycle(up);
+        off.remove();
+    }
+    res.ok = Object.values(res).every(v => v.ok);
+    return res;
+};
+</script>
+</body></html>

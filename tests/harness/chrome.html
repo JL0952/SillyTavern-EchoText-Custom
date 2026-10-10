@@ -1,0 +1,79 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>Panel chrome preview</title>
+<link rel="stylesheet" href="build/vendor/css/fontawesome.min.css">
+<link rel="stylesheet" href="build/vendor/css/solid.min.css">
+<link rel="stylesheet" href="../../style.css">
+<style>
+    body { background: #1b1d2b; color: #ddd; font-family: sans-serif; margin: 12px; }
+    body.light-bg { background: #e8e6ef; }
+    .grid { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+    .cell > .lbl { font-size: 12px; color: #999; margin: 0 0 4px; }
+    .cell .et-panel { position: relative !important; inset: auto !important; transform: none !important; opacity: 1 !important;
+        width: 380px !important; height: 560px !important; display: flex !important; flex-direction: column; visibility: visible !important; }
+    .cell .et-panel-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #host { position: absolute; left: -9999px; top: 0; }
+</style>
+</head><body>
+<div id="host"></div>
+<div class="grid" id="out"></div>
+<script src="build/vendor/jquery-3.5.1.min.js"></script>
+<script src="build/vendor/purify.min.js"></script>
+<script>window.SillyTavern = { libs: { DOMPurify: window.DOMPurify } };</script>
+<script src="../../lib/rich-messages.js"></script>
+<script src="../../lib/features.js"></script>
+<script src="../../lib/chat-view-model.js"></script>
+<script src="../../platforms/echotext/platform.js"></script>
+<script src="../../platforms/wechat/platform.js"></script>
+<script src="scenarios.js"></script>
+<script src="build/bundle-chrome.js"></script>
+<script>
+(async function () {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const params = new URLSearchParams(location.search);
+    const platform = params.get('platform') || 'wechat';
+    const sc = window.EchoTextScenarios[0];
+    const history = JSON.parse(JSON.stringify(sc.history));
+    const USER_AVATAR = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#c9a27e"/><circle cx="40" cy="32" r="14" fill="#fff8"/><rect x="18" y="52" width="44" height="22" rx="11" fill="#fff8"/></svg>');
+    const env = { settings: { ...sc.settings, defaultPlatform: platform }, groupManager: null, FA_REACTIONS: window.EchoTextScenarioReactions,
+        showTypingIndicator: false, BASE_URL: '', VERSION_QUERY: '',
+        getCurrentCharacter: () => ({ name: 'Mira', avatar: 'mira.png' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+        getUserName: () => '我', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null, _pickerAvatarBg: () => '#7c6f9c',
+        isMobileDevice: () => false, getChatHistory: () => history, getUserAvatarUrl: () => USER_AVATAR, isCombinedGroupMode: () => false };
+    const r = window.EchoTextHarness.chrome(env);
+    const host = document.getElementById('host');
+    host.innerHTML = r.buildPanelHtml();
+    r.renderMessages(history);
+    await sleep(600);
+    const base = document.getElementById('et-panel');
+
+    const states = {
+        'empty field': p => {},
+        'draft typed (+ becomes 发送)': p => { p.querySelector('#et-input').textContent = '今晚几点？'; },
+        'character typing (title)': p => { p.setAttribute('data-et-typing', ''); },
+        'generating (stop instead of +)': p => { const b = p.querySelector('#et-send-btn'); b.classList.add('et-send-stop'); b.innerHTML = '<i class="fa-solid fa-stop"></i>'; },
+        'composing a photo': p => { p.querySelector('.et-input-wrap').classList.add('et-input-wrap-compose'); const a = p.querySelector('#et-attach-btn'); a.classList.add('et-attach-btn-active'); a.innerHTML = '<i class="fa-solid fa-image"></i>'; p.querySelector('#et-input').setAttribute('placeholder', "Describe the photo you're sending..."); },
+        '⋯ menu open': p => { p.querySelector('#et-overflow-menu').classList.add('et-overflow-menu-open'); },
+    };
+    const out = document.getElementById('out');
+    const schemes = (params.get('schemes') || 'light,dark').split(',');
+    const only = params.get('only');
+    for (const scheme of schemes) {
+        for (const [name, apply] of Object.entries(states)) {
+            if (only && !name.startsWith(only)) continue;
+            const cell = document.createElement('div');
+            cell.className = 'cell';
+            cell.innerHTML = `<div class="lbl">${platform} · ${scheme} · ${name}</div>`;
+            const p = base.cloneNode(true);
+            p.setAttribute('data-et-scheme', scheme);
+            apply(p);
+            cell.appendChild(p);
+            out.appendChild(cell);
+            const m = p.querySelector('.et-messages');
+            m.scrollTop = m.scrollHeight;
+        }
+    }
+    window.__done = true;
+})().catch(e => { window.__error = String(e && e.stack || e); console.error(e); });
+</script>
+</body></html>

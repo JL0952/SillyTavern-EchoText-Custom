@@ -1,0 +1,583 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>EchoText render harness</title>
+<link rel="stylesheet" href="build/vendor/css/fontawesome.min.css">
+<link rel="stylesheet" href="build/vendor/css/solid.min.css">
+<link rel="stylesheet" href="../../style.css">
+<link rel="stylesheet" href="../../platforms/wechat/platform.css">
+<style>
+    body { background: #1b1d2b; color: #ddd; font-family: sans-serif; margin: 12px; }
+    .row { margin-bottom: 28px; }
+    .row h2 { font-size: 14px; margin: 0 0 6px; }
+    .row h2 .ok { color: #4ade80; } .row h2 .bad { color: #f87171; }
+    .cols { display: flex; gap: 16px; align-items: flex-start; }
+    .col > .lbl { font-size: 12px; color: #999; margin-bottom: 4px; }
+    .static-panel { position: relative !important; width: 400px; height: auto !important; min-height: 0 !important; }
+    .static-panel .et-messages { overflow: visible !important; max-height: none !important; }
+    #live { left: -9999px; top: 0; width: 400px; }
+    pre { white-space: pre-wrap; font-size: 11px; background: #000; padding: 6px; max-width: 900px; }
+</style>
+</head>
+<body>
+<div id="live" class="et-panel"><div class="et-panel-content"><div class="et-messages" id="et-messages"><div class="et-messages-inner" id="et-messages-inner"></div></div></div></div>
+<div id="out"></div>
+
+<script src="build/vendor/jquery-3.5.1.min.js"></script>
+<script src="build/vendor/purify.min.js"></script>
+<script>
+    window.SillyTavern = { libs: { DOMPurify: window.DOMPurify } };
+    window.toastr = { info() {}, warning() {} };
+</script>
+<script src="../../lib/rich-messages.js"></script>
+<script src="../../lib/features.js"></script>
+<script src="../../lib/chat-view-model.js" onerror="console.log('no view model')"></script>
+<script src="../../platforms/echotext/platform.js" onerror="console.log('no platform')"></script>
+<script src="build/platform.old.js" onerror="console.log('no old platform')"></script>
+<script src="../../platforms/wechat/platform.js" onerror="console.log('no wechat platform')"></script>
+<script src="scenarios.js"></script>
+<script src="build/bundle-old.js"></script>
+<script src="build/bundle-new.js" onerror="console.log('no new bundle')"></script>
+<script src="build/bundle-touch.js" onerror="console.log('no touch bundle')"></script>
+<script>
+(async function () {
+    // One clock for the whole run: a message without a timestamp shows "now",
+    // which would differ between two renders a minute boundary apart
+    const T0 = Date.now();
+    Date.now = () => T0;
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const FA_REACTIONS = window.EchoTextScenarioReactions;
+    const labels = Object.keys(window.EchoTextHarness).filter(l => l !== 'touch');
+    const scenarios = [...window.EchoTextScenarios, { name: 'fresh multi-bubble (stagger, captured immediately)', fresh: true, history: null, settings: window.EchoTextScenarios[0].settings }];
+
+    function freshHistory() {
+        const now = Date.now();
+        return [
+            { is_user: true, mes: 'hi', send_date: now - 5000 },
+            { is_user: false, mes: 'one\ntwo\n<photo>three</photo>', send_date: now - 1000 },
+        ];
+    }
+
+    // Attributes 2a adds or renames; stripped so the remaining markup can be compared
+    const normalize = html => html
+        // 2c: one typing-indicator template for every path (checked on its own below)
+        .replace(/<div class="et-message et-message-char et-message-typing" id="et-typing-indicator-msg"[\s\S]*$/, '')
+        .replace(/ data-et-arrive=""/g, '')
+        .replace(/ et-reaction-new/g, '')
+        .replace(/ data-et-role="[^"]*"/g, '')
+        .replace(/ data-et-refreshed=""/g, '')
+        .replace(/>\s+</g, '><')
+        .replace(/\s+/g, ' ')
+        .replace(/ data-et-action="[^"]*"/g, '')
+        .replace(/ aria-expanded="[^"]*"/g, '')
+        .replace(/ data-image-index="[^"]*"/g, '')
+        .replace(/ data-emoji="/g, ' data-reaction="')
+        .trim();
+
+    async function runScenario(label, sc) {
+        const history = JSON.parse(JSON.stringify(sc.history || freshHistory()));
+        const inner = document.getElementById('et-messages-inner');
+        let elIndex = new Map();
+        const log = [];
+        const ser = v => {
+            if (v && v.jquery) v = v[0];
+            if (v instanceof Element) return elIndex.has(v) ? `el#${elIndex.get(v)}` : 'el?';
+            if (Array.isArray(v) && v === history) return 'HISTORY';
+            if (Array.isArray(v) && v.length && v[0] && 'mes' in v[0]) return `H[${v.length}]`;
+            return v;
+        };
+        const rec = name => (...args) => { log.push(JSON.stringify([name, args.map(ser)])); };
+        const env = {
+            settings: sc.settings,
+            groupManager: sc.groupManager || null,
+            FA_REACTIONS,
+            showTypingIndicator: !!sc.typing,
+            getCurrentCharacter: () => sc.noChar ? null : { name: 'Mira', avatar: 'mira.png' },
+            showNoCharacterMessage: () => jQuery('#et-messages-inner').html('<div class="et-no-char">NO CHARACTER</div>'),
+            getCharacterName: () => sc.noChar ? 'Character' : 'Mira',
+            isTetheredMode: () => true,
+            getUserName: () => 'You <b>me</b>',
+            getCharacterKey: () => 'mira.png',
+            getCharAvatarUrl: () => null,
+            _pickerAvatarBg: () => '#335577',
+            isMobileDevice: () => false,
+            getChatHistory: () => history,
+        };
+        for (const fn of ['closeAllDotMenus', 'closeAllReactOverlays', 'toggleReactOverlay', 'toggleDotsMenu', 'saveChatHistory',
+            'updateSwipeInPlace', 'generateEchoTextSwipe', 'openTransferResponseMenu', 'openGeneratedImageLightbox',
+            'showMemorySaveModal', 'showMemoryRemoveModal']) env[fn] = rec(fn);
+        env.syncMsgFromSwipe = msg => log.push(JSON.stringify(['syncMsgFromSwipe', msg.swipeIndex]));
+        // Mirrors addReaction: ignores bad targets, and its re-render detaches the clicked pills
+        env.addReaction = (idx, id) => {
+            const msg = history[idx];
+            if (!FA_REACTIONS.some(r => r.id === id) || !msg || msg.is_user) return;
+            log.push(JSON.stringify(['addReaction', idx, id]));
+            jQuery(`#et-reactions-${idx}`).empty();
+        };
+
+        jQuery('#et-messages-inner').off('click.et-actions');
+        jQuery('#live').off('click.oldmem');
+        const r = window.EchoTextHarness[label](env);
+        if (r.bindMessageActions) r.bindMessageActions();
+        else {
+            // The pre-2a memory highlight handler lived on #et-panel
+            jQuery('#live').on('click.oldmem', '.et-mem-highlight', function (e) {
+                e.stopPropagation();
+                if (jQuery(this).hasClass('et-mem-highlight-saved')) env.showMemoryRemoveModal(this);
+                else env.showMemorySaveModal(this);
+            });
+        }
+        r.renderMessages(history);
+        const html = inner.innerHTML;
+        if (!sc.fresh) await sleep(600);
+        const settledHtml = inner.innerHTML;
+
+        // Click every element in order and record what each click calls
+        const els = [...inner.querySelectorAll('*')];
+        elIndex = new Map(els.map((el, i) => [el, i]));
+        const photoState = () => [...inner.querySelectorAll('.et-photo-card')]
+            .map(c => (c.classList.contains('et-photo-card-open') || c.getAttribute('aria-expanded') === 'true') ? 1 : 0).join('');
+        const clicks = [];
+        els.forEach((el, i) => {
+            log.length = 0;
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            clicks.push(log.join(' ') + ' | photos:' + photoState());
+        });
+        return { html: sc.fresh ? html : settledHtml, clicks, count: els.length };
+    }
+
+    const results = [];
+    const out = document.getElementById('out');
+    const previewOnly = location.search.includes('preview');
+    for (const sc of previewOnly ? [] : scenarios) {
+        const res = { name: sc.name };
+        const runs = {};
+        for (const label of labels) runs[label] = await runScenario(label, sc);
+        const [a, b] = labels;
+        res.htmlEqual = normalize(runs[a].html) === normalize(runs[b].html);
+        res.elements = [runs[a].count, runs[b].count];
+        res.clickDiffs = [];
+        res.actions = 0;
+        runs[a].clicks.forEach((c, i) => {
+            if (c !== runs[b].clicks[i]) res.clickDiffs.push({ i, [a]: c, [b]: runs[b].clicks[i] });
+            if (!c.startsWith(' |')) res.actions++;
+        });
+        res.ok = res.htmlEqual && res.elements[0] === res.elements[1] && !res.clickDiffs.length;
+        // When the markup changes on purpose: do the clicks still trigger the same calls (element positions ignored)?
+        const actionSet = l => runs[l].clicks.map(c => c.replace(/el#\d+/g, 'el').replace(/ \| photos:.*$/, '')).filter(Boolean).sort();
+        res.actionsSame = JSON.stringify(actionSet(a)) === JSON.stringify(actionSet(b));
+        res.actionDiff = res.actionsSame ? null : { [a]: actionSet(a).filter(x => !actionSet(b).includes(x)), [b]: actionSet(b).filter(x => !actionSet(a).includes(x)) };
+        results.push(res);
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML = `<h2>${sc.name} ${res.ok ? '<span class="ok">SAME (html + clicks)</span>' : res.actionsSame ? '<span class="ok">markup changed, same click actions</span>' : '<span class="bad">DIFFERENT</span>'} · ${res.actions} clicks did something</h2><div class="cols">${labels.map(l => `<div class="col"><div class="lbl">${l}</div><div class="et-panel static-panel"><div class="et-panel-content"><div class="et-messages"><div class="et-messages-inner">${runs[l].html}</div></div></div></div></div>`).join('')}</div>`;
+        out.appendChild(row);
+    }
+    // ── refreshMessages() must equal a full re-render, replacing only what changed ──
+    const refreshResults = [];
+    const newLabel = labels.find(l => l === 'new');
+    async function refreshTest(name, scIndex, mutate, expectReplaced, check, expectEqual = true) {
+        const sc = window.EchoTextScenarios[scIndex];
+        const history = JSON.parse(JSON.stringify(sc.history));
+        const inner = document.getElementById('et-messages-inner');
+        const noop = () => {};
+        const env = {
+            settings: { ...sc.settings, defaultPlatform: currentPlatform }, BASE_URL: '', groupManager: sc.groupManager || null, FA_REACTIONS, showTypingIndicator: false,
+            getCurrentCharacter: () => ({ name: 'Mira', avatar: 'mira.png' }), getCharacterName: () => 'Mira',
+            isTetheredMode: () => true, getUserName: () => 'You <b>me</b>', getCharacterKey: () => 'mira.png',
+            getCharAvatarUrl: () => null, _pickerAvatarBg: () => '#335577', isMobileDevice: () => false,
+            getChatHistory: () => history,
+        };
+        const r = window.EchoTextHarness[newLabel](env);
+        r.renderMessages(history);
+        await sleep(600);
+        const before = [...inner.children];
+        mutate(history, inner);
+        r.refreshMessages(history);
+        await sleep(600);
+        const replaced = [...inner.querySelectorAll('[data-et-refreshed]')].map(el => el.dataset.index);
+        const kept = before.filter(el => el.isConnected).length;
+        const extra = check ? check(inner) : null;
+        const refreshed = normalize(inner.innerHTML);
+        window.EchoTextHarness[newLabel](env).renderMessages(history);
+        await sleep(600);
+        const full = normalize(inner.innerHTML);
+        let at = 0; while (at < full.length && full[at] === refreshed[at]) at++;
+        const res = { name, equal: refreshed === full, replaced, expectReplaced, kept, extra,
+            ok: (refreshed === full) === expectEqual && JSON.stringify(replaced) === JSON.stringify(expectReplaced) && (extra === null || extra === true) };
+        if (refreshed !== full) res.diff = { full: full.slice(at - 150, at + 150), refreshed: refreshed.slice(at - 150, at + 150) };
+        refreshResults.push(res);
+    }
+    // renderMessages() on the chat already on screen updates it in place; must equal a full render
+    async function renderTest(name, scIndex, mutate, expect, opts = {}) {
+        const sc = window.EchoTextScenarios[scIndex];
+        const history = JSON.parse(JSON.stringify(sc.history));
+        const inner = document.getElementById('et-messages-inner');
+        const env = {
+            settings: { ...sc.settings, defaultPlatform: currentPlatform }, BASE_URL: '', groupManager: sc.groupManager || null, FA_REACTIONS, showTypingIndicator: !!opts.typing,
+            getCurrentCharacter: () => ({ name: 'Mira', avatar: 'mira.png' }), getCharacterName: () => 'Mira',
+            isTetheredMode: () => true, getUserName: () => 'You <b>me</b>', getCharacterKey: () => 'mira.png',
+            getCharAvatarUrl: () => null, _pickerAvatarBg: () => '#335577', isMobileDevice: () => false,
+            getChatHistory: () => history,
+        };
+        const r = window.EchoTextHarness[newLabel](env);
+        r.renderMessages(history);
+        await sleep(400);
+        const before = [...inner.children];
+        mutate(history, env);
+        r.renderMessages(history);
+        const typingEls = inner.querySelectorAll('[data-et-role~="typing"]');
+        // WeChat shows typing in the header, not in the list
+        const typingLast = !opts.typing || (currentPlatform === 'wechat'
+            ? typingEls.length === 0
+            : typingEls.length === 1 && inner.lastElementChild === typingEls[0]);
+        await sleep(400);
+        const got = {
+            kept: before.filter(el => el.isConnected && !el.matches('[data-et-role~="typing"]')).length,
+            replaced: [...inner.querySelectorAll('[data-et-refreshed]')].map(el => el.dataset.index),
+            added: [...inner.children].filter(el => !before.includes(el) && !el.hasAttribute('data-et-refreshed') && el.matches('[data-et-role~="message"]')).map(el => el.dataset.index),
+        };
+        const updated = normalize(inner.innerHTML);
+        window.EchoTextHarness[newLabel](env).renderMessages(history);
+        await sleep(400);
+        const full = normalize(inner.innerHTML);
+        let at = 0; while (at < full.length && full[at] === updated[at]) at++;
+        const res = { name: '[' + currentPlatform + '] render: ' + name, equal: updated === full, got, expect, typingLast,
+            ok: updated === full && JSON.stringify(got) === JSON.stringify(expect) && typingLast };
+        if (updated !== full) res.diff = { full: full.slice(at - 150, at + 150), updated: updated.slice(at - 150, at + 150) };
+        refreshResults.push(res);
+    }
+
+    let currentPlatform = 'echotext';
+    if (!previewOnly && newLabel && window.EchoTextHarness[newLabel]) {
+      for (const platformId of ['echotext', 'wechat']) {
+        currentPlatform = platformId;
+        const last = 16;
+        await renderTest('user sends a message', 0,
+            h => { h.push({ is_user: true, mes: 'new one', send_date: h[last].send_date + 60000 }); },
+            { kept: 17, replaced: [], added: ['17'] });
+        await renderTest('user sends while the character is typing', 0,
+            h => { h.push({ is_user: true, mes: 'new one', send_date: h[last].send_date + 60000 }); },
+            { kept: 17, replaced: [], added: ['17'] }, { typing: true });
+        await renderTest('character replies (the old last reply loses its swipe arrows)', 0,
+            h => { h.push({ is_user: false, mes: 'one\ntwo\n<transfer>9</transfer>', send_date: h[last].send_date + 60000 }); },
+            { kept: 16, replaced: ['16'], added: ['17'] });
+        await renderTest('message deleted from the middle', 0,
+            h => { h.splice(5, 1); },
+            { kept: 5, replaced: ['5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'], added: [] });
+        await renderTest('nothing changed', 0, () => {}, { kept: 17, replaced: [], added: [] });
+        await renderTest('platform switched: drawn again from scratch', 0,
+            (h, env) => { env.settings.defaultPlatform = currentPlatform === 'wechat' ? 'echotext' : 'wechat'; },
+            { kept: 0, replaced: [], added: [...Array(17).keys()].map(String) });
+      }
+      currentPlatform = 'echotext';
+      for (const platformId of ['echotext', 'wechat']) {
+        currentPlatform = platformId;
+        const firstResult = refreshResults.length;
+        await refreshTest('user taps a reaction on a character message', 0,
+            h => { h[4].reactions = { heart: { count: 1, mine: true } }; }, currentPlatform === 'wechat' ? [] : ['4']);
+        await refreshTest('read receipt changes', 0,
+            h => { h[0].meta = { receipt: { state: 'ghosted', note: 'left on read' } }; }, ['0']);
+        await refreshTest('swipe changes text, cards and the reaction on the user message', 0,
+            h => { const m = h[16]; m.swipeIndex = 2; m.mes = 'Mira: new version\n<react>sad</react>\n<photo>x</photo>'; delete m.imageAttachment; }, currentPlatform === 'wechat' ? ['16'] : ['15', '16']);
+        await refreshTest('nothing changed', 0, () => {}, []);
+        await refreshTest('a message not on screen is skipped', 0,
+            h => { h.push({ is_user: true, mes: 'new', send_date: h[16].send_date + 1000 }); }, [], null, false);
+        await refreshTest('grouping changes when a user message is edited into a char reply', 3,
+            h => { h[2].is_user = false; }, ['1', '2']);
+        await refreshTest('combine mode reaction', 4,
+            h => { h[1].reactions = { star: { count: 2, mine: false } }; }, currentPlatform === 'wechat' ? [] : ['1']);
+        // An open photo stays open when its message is re-rendered (not checked against a full render)
+        refreshResults.push(await (async () => {
+            const sc = window.EchoTextScenarios[0];
+            const history = JSON.parse(JSON.stringify(sc.history));
+            const inner = document.getElementById('et-messages-inner');
+            const env = { settings: { ...sc.settings, defaultPlatform: currentPlatform }, BASE_URL: '', groupManager: null, FA_REACTIONS, showTypingIndicator: false,
+                getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+                getUserName: () => 'You', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+                _pickerAvatarBg: () => '#335577', isMobileDevice: () => false, getChatHistory: () => history };
+            const r = window.EchoTextHarness[newLabel](env);
+            r.renderMessages(history);
+            inner.querySelector('[data-index="1"] [data-et-action="photo-toggle"]').setAttribute('aria-expanded', 'true');
+            history[1].mes += '\nmore';
+            r.refreshMessages(history);
+            const open = inner.querySelector('[data-index="1"] [data-et-action="photo-toggle"]').getAttribute('aria-expanded');
+            const refreshed = inner.querySelector('[data-index="1"]').hasAttribute('data-et-refreshed');
+            return { name: 'open photo stays open', ok: open === 'true' && refreshed, open, refreshed };
+        })());
+        // Touch swipe on mobile: the bubble is replaced, so the slide-in and the next swipe use the new one
+        if (window.EchoTextHarness.touch) refreshResults.push(await (async () => {
+            const sc = window.EchoTextScenarios[0];
+            const history = JSON.parse(JSON.stringify(sc.history));
+            const inner = document.getElementById('et-messages-inner');
+            const synced = [];
+            const env = { settings: { ...sc.settings, defaultPlatform: currentPlatform }, BASE_URL: '', groupManager: null, FA_REACTIONS, showTypingIndicator: false,
+                getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+                getUserName: () => 'You', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+                _pickerAvatarBg: () => '#335577', isMobileDevice: () => true, getChatHistory: () => history,
+                saveChatHistory: () => {},
+                syncMsgFromSwipe: msg => { msg.mes = `swipe ${msg.swipeIndex}\n<react>sad</react>`; synced.push(msg.swipeIndex); } };
+            const r = window.EchoTextHarness.touch(env);
+            r.renderMessages(history);
+            await sleep(400);
+            const swipe = async (dx) => {
+                const bubble = inner.querySelector('[data-index="16"] [data-et-role~="main"]');
+                const rect = bubble.getBoundingClientRect();
+                const at = x => new Touch({ identifier: 1, target: bubble, clientX: rect.left + x, clientY: rect.top + 10 });
+                bubble.dispatchEvent(new TouchEvent('touchstart', { touches: [at(150)], bubbles: true }));
+                for (const step of [20, 40, 70, 100]) bubble.dispatchEvent(new TouchEvent('touchmove', { touches: [at(150 + Math.sign(dx) * step)], bubbles: true, cancelable: true }));
+                bubble.dispatchEvent(new TouchEvent('touchend', { changedTouches: [at(150 + dx)], bubbles: true }));
+                await sleep(700);
+                return bubble;
+            };
+            const first = await swipe(-100);      // left: next version (index 1 → 2)
+            const afterFirst = inner.querySelector('[data-index="16"] [data-et-role~="main"]');
+            const second = await swipe(100);      // right: previous version, on the new bubble
+            const afterSecond = inner.querySelector('[data-index="16"] [data-et-role~="main"]');
+            const styleLeft = el => el.style.transform + el.style.opacity + el.style.transition;
+            const res = {
+                name: 'touch swipe re-renders, slides the new bubble in, and the next swipe works',
+                synced,
+                replacedFirst: !first.isConnected && afterFirst.closest('[data-et-role~="message"]').hasAttribute('data-et-refreshed'),
+                replacedSecond: !second.isConnected,
+                stylesCleared: styleLeft(afterSecond) === '',
+                reactionMoved: currentPlatform !== 'echotext' || !!inner.querySelector('[data-index="15"] .et-char-reaction-pill'),
+                counter: inner.querySelector('[data-index="16"] .et-swipe-counter, [data-index="16"] .wx-swipe span')?.textContent,
+            };
+            res.ok = JSON.stringify(synced) === '[2,1]' && res.replacedFirst && res.replacedSecond && res.stylesCleared && res.reactionMoved && res.counter === '2 / 3';
+            return res;
+        })());
+
+        refreshResults.slice(firstResult).forEach(r => { r.name = `[${platformId}] ${r.name}`; });
+      }
+      currentPlatform = 'echotext';
+
+        // Typing indicator: dots, then the avatar
+        refreshResults.push((() => {
+            const sc = window.EchoTextScenarios[2];
+            const history = JSON.parse(JSON.stringify(sc.history));
+            const inner = document.getElementById('et-messages-inner');
+            const env = { settings: sc.settings, groupManager: null, FA_REACTIONS, showTypingIndicator: true,
+                getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+                getUserName: () => 'You', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+                _pickerAvatarBg: () => '#335577', isMobileDevice: () => false, getChatHistory: () => history };
+            window.EchoTextHarness[newLabel](env).renderMessages(history);
+            const bubble = inner.querySelector('[data-et-role~="typing"] .et-typing-bubble');
+            const order = [...bubble.children].map(c => c.className.split(' ')[0]).join(' > ');
+            return { name: 'typing indicator (one template): ' + order, ok: order === 'et-typing-dots' };
+        })());
+
+        // Inline edit: the message becomes one editable text bubble; Cancel restores it
+      for (const platformId of ['echotext', 'wechat']) {
+        currentPlatform = platformId;
+        const firstResult = refreshResults.length;
+        for (const [idx, what] of [[12, 'plain character text'], [9, 'user photo + text'], [1, 'character multi-bubble with photo'], [4, 'character reply with reactions']]) {
+            refreshResults.push(await (async () => {
+                const sc = window.EchoTextScenarios[0];
+                const history = JSON.parse(JSON.stringify(sc.history));
+                history[4].reactions = { heart: { count: 1, mine: true } };
+                const inner = document.getElementById('et-messages-inner');
+                const env = { settings: { ...sc.settings, defaultPlatform: currentPlatform }, BASE_URL: '', groupManager: null, FA_REACTIONS, showTypingIndicator: false,
+                    getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+                    getUserName: () => 'You', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+                    _pickerAvatarBg: () => '#335577', isMobileDevice: () => false, getChatHistory: () => history,
+                    saveChatHistory: () => {} };
+                const r = window.EchoTextHarness[newLabel](env);
+                r.renderMessages(history);
+                await sleep(600);
+                const before = normalize(inner.innerHTML);
+                r.startInlineEdit(history, idx);
+                const msgEl = inner.querySelector(`[data-et-role~="message"][data-index="${idx}"]`);
+                const editable = msgEl.querySelectorAll('[contenteditable="true"]');
+                const res = {
+                    name: `inline edit — ${what}`,
+                    bubbles: msgEl.querySelectorAll('[data-et-role~="bubble"]').length,
+                    rawText: editable[0]?.textContent === history[idx].mes,
+                    toolbarAfterMain: msgEl.querySelector('[data-et-role~="main"]')?.nextElementSibling?.classList.contains('et-edit-toolbar'),
+                    pillsKept: idx !== 4 || currentPlatform !== 'echotext' || msgEl.querySelectorAll('.et-reaction-pill').length === 1,
+                };
+                // Entering again while editing does nothing
+                r.startInlineEdit(history, idx);
+                res.single = inner.querySelectorAll('.et-edit-toolbar').length === 1;
+                msgEl.querySelector('.et-edit-cancel').click();
+                await sleep(600);
+                res.restored = normalize(inner.innerHTML) === before;
+                res.ok = editable.length === 1 && res.bubbles === 1 && res.rawText && res.toolbarAfterMain && res.pillsKept && res.single && res.restored;
+                return res;
+            })());
+        }
+
+        refreshResults.slice(firstResult).forEach(r => { r.name = `[${platformId}] ${r.name}`; });
+      }
+      currentPlatform = 'echotext';
+
+        // Editing after a hidden message (a reaction-only reply on WeChat) edits that message, not its neighbour
+        refreshResults.push(await (async () => {
+            const sc = window.EchoTextScenarios[0];
+            const history = JSON.parse(JSON.stringify(sc.history));
+            history.splice(7, 0, { is_user: false, mes: '<react>heart</react>', send_date: history[6].send_date + 1000 });
+            const inner = document.getElementById('et-messages-inner');
+            const env = { settings: { ...sc.settings, defaultPlatform: 'wechat' }, BASE_URL: '', groupManager: null, FA_REACTIONS, showTypingIndicator: false,
+                getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+                getUserName: () => 'You', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+                _pickerAvatarBg: () => '#335577', isMobileDevice: () => false, getChatHistory: () => history, saveChatHistory: () => {} };
+            const r = window.EchoTextHarness[newLabel](env);
+            r.renderMessages(history);
+            await sleep(300);
+            const idx = 10;
+            const hidden = !inner.querySelector('[data-et-role~="message"][data-index="7"]');
+            r.startInlineEdit(history, idx);
+            const edited = inner.querySelector('[contenteditable="true"]');
+            const msgEl = edited?.closest('[data-et-role~="message"]');
+            const res = { name: `[wechat] inline edit after a hidden reaction-only reply: edits #${msgEl?.dataset.index}`, hidden,
+                index: msgEl?.dataset.index, isUser: msgEl?.dataset.isUser, rawText: edited?.textContent === history[idx].mes };
+            res.ok = hidden && res.index === String(idx) && res.isUser === (history[idx].is_user ? '1' : '0') && res.rawText;
+            msgEl?.querySelector('.et-edit-cancel')?.click();
+            return res;
+        })());
+
+        // A platform without reactions: no react buttons, pills or reaction-only replies; switching back restores them
+        refreshResults.push(await (async () => {
+            const sc = window.EchoTextScenarios[0];
+            const history = JSON.parse(JSON.stringify(sc.history));
+            history.splice(7, 0, { is_user: false, mes: '<react>heart</react>', send_date: history[6].send_date + 1000 });
+            const before = JSON.stringify(history);
+            const inner = document.getElementById('et-messages-inner');
+            const env = { settings: sc.settings, groupManager: null, FA_REACTIONS, showTypingIndicator: false,
+                getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+                getUserName: () => 'You', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+                _pickerAvatarBg: () => '#335577', isMobileDevice: () => false, getChatHistory: () => history };
+            const platform = window.EchoTextPlatforms.echotext;
+            const all = platform.features;
+            const count = () => ({
+                messages: inner.querySelectorAll('[data-et-role~="message"]').length,
+                reactButtons: inner.querySelectorAll('[data-et-action="react"]').length,
+                pills: inner.querySelectorAll('[data-et-action="reaction-toggle"]').length,
+                charReactions: inner.querySelectorAll('.et-char-reaction-pill').length,
+                notes: inner.querySelectorAll('.et-reaction-note').length,
+            });
+            const r = window.EchoTextHarness[newLabel](env);
+            r.renderMessages(history);
+            const on = count();
+            platform.features = ['photo', 'transfer'];
+            r.renderMessages(history);
+            const off = count();
+            platform.features = all;
+            r.renderMessages(history);
+            const back = count();
+            const res = { name: `no-react platform: ${JSON.stringify(on)} → ${JSON.stringify(off)} → back ${JSON.stringify(back)}` };
+            res.ok = off.reactButtons === 0 && off.pills === 0 && off.charReactions === 0 && off.notes === 0
+                && off.messages === on.messages - 1 && on.reactButtons > 0 && on.pills > 0 && on.charReactions > 0 && on.notes > 0
+                && JSON.stringify(back) === JSON.stringify(on) && JSON.stringify(history) === before;
+            return res;
+        })());
+
+        // Step 3: pick the no-reaction test platform for the character through the real picker, then go back
+        refreshResults.push(await (async () => {
+            const sc = window.EchoTextScenarios[0];
+            const history = JSON.parse(JSON.stringify(sc.history));
+            history.splice(7, 0, { is_user: false, mes: '<react>heart</react>', send_date: history[6].send_date + 1000 });
+            const before = JSON.stringify(history);
+            const inner = document.getElementById('et-messages-inner');
+            const settings = { ...sc.settings, defaultPlatform: 'echotext', platformByCharacter: {} };
+            let saves = 0;
+            const env = { settings, groupManager: null, FA_REACTIONS, showTypingIndicator: false, panelOpen: true,
+                BASE_URL: '/ext', VERSION_QUERY: '?v1', composeMode: null,
+                getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+                getUserName: () => 'You', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+                _pickerAvatarBg: () => '#335577', isMobileDevice: () => false, getChatHistory: () => history,
+                saveSettings: () => { saves++; }, setComposeMode: () => {} };
+            // Stand-ins for the panel and the settings pickers
+            const chrome = document.createElement('div');
+            chrome.innerHTML = '<div id="et-panel"></div><button id="et-attach-btn"></button><select id="et_platform_default_panel"></select><label id="et_platform_character_label_panel"></label><select id="et_platform_character_panel"></select>';
+            document.body.appendChild(chrome);
+            const count = () => ({
+                platform: document.getElementById('et-panel').dataset.platform,
+                messages: inner.querySelectorAll('[data-et-role~="message"]').length,
+                reactButtons: inner.querySelectorAll('[data-et-action="react"]').length,
+                pills: inner.querySelectorAll('[data-et-action="reaction-toggle"]').length,
+                charReactions: inner.querySelectorAll('.et-char-reaction-pill').length,
+            });
+            const r = window.EchoTextHarness[newLabel](env);
+            r.bindPlatformSelects();
+            r.renderMessages(history);
+            const on = count();
+            const select = document.getElementById('et_platform_character_panel');
+            const menu = [...select.options].map(o => o.textContent);
+            const label = document.getElementById('et_platform_character_label_panel').textContent;
+            // WeChat: a real pack without reactions
+            select.value = 'wechat';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            await sleep(50);
+            const off = count();
+            const stored = JSON.stringify(settings.platformByCharacter);
+            select.value = '';
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            await sleep(50);
+            const back = count();
+
+            // A pack with a stylesheet and nothing to attach: CSS link in, "+" hidden; switching away removes the link
+            window.EchoTextPlatforms['css-test'] = { ...window.EchoTextPlatforms.echotext, id: 'css-test', stylesheet: 'platform.css', features: ['react'] };
+            settings.defaultPlatform = 'css-test';
+            await sleep(0);
+            r.renderMessages(history);
+            const link = document.getElementById('et-platform-css')?.getAttribute('href');
+            const attachHidden = document.getElementById('et-attach-btn').style.display === 'none';
+            settings.defaultPlatform = 'echotext';
+            await sleep(0);
+            r.renderMessages(history);
+            const linkGone = !document.getElementById('et-platform-css');
+            const attachBack = document.getElementById('et-attach-btn').style.display !== 'none';
+            delete window.EchoTextPlatforms['css-test'];
+            chrome.remove();
+
+            const res = { name: `step 3: picker → WeChat → default. ${JSON.stringify(on)} → ${JSON.stringify(off)} → ${JSON.stringify(back)}; menu ${JSON.stringify(menu)}; label "${label}"; stored ${stored}; css ${link}`,
+                saves, attachHidden, linkGone, attachBack };
+            res.ok = on.platform === 'echotext' && off.platform === 'wechat' && back.platform === 'echotext'
+                && off.reactButtons === 0 && off.pills === 0 && off.charReactions === 0 && off.messages === on.messages - 1
+                && JSON.stringify({ ...back }) === JSON.stringify({ ...on })
+                && stored === '{"mira.png":"wechat"}' && JSON.stringify(settings.platformByCharacter) === '{}'
+                && saves === 2 && JSON.stringify(history) === before
+                && link === '/ext/platforms/css-test/platform.css?v1' && attachHidden && linkGone && attachBack
+                && menu.join('|') === 'Use default|EchoText|微信 WeChat' && label === 'Platform for Mira';
+            return res;
+        })());
+
+        const rrow = document.createElement('div');
+        rrow.className = 'row';
+        rrow.innerHTML = '<h2>refreshMessages()</h2>' + refreshResults.map(r => `<div>${r.ok ? '<span class="ok">OK</span>' : '<span class="bad">FAIL</span>'} ${r.name} — replaced [${r.replaced ?? ''}]</div>`).join('');
+        out.prepend(rrow);
+    }
+
+    // WeChat, light and dark, on the same mock chats
+    const USER_AVATAR = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect width="80" height="80" fill="#c9a27e"/><circle cx="40" cy="32" r="14" fill="#fff8"/><rect x="18" y="52" width="44" height="22" rx="11" fill="#fff8"/></svg>');
+    for (const scIndex of [4, 3, 0]) {
+        const sc = window.EchoTextScenarios[scIndex];
+        const history = JSON.parse(JSON.stringify(sc.history));
+        const inner = document.getElementById('et-messages-inner');
+        const env = { settings: { ...sc.settings, defaultPlatform: 'wechat' }, groupManager: sc.groupManager || null, FA_REACTIONS,
+            showTypingIndicator: !!sc.typing, BASE_URL: '',
+            getCurrentCharacter: () => ({ name: 'Mira' }), getCharacterName: () => 'Mira', isTetheredMode: () => true,
+            getUserName: () => '我', getCharacterKey: () => 'mira.png', getCharAvatarUrl: () => null,
+            _pickerAvatarBg: name => ({ M: '#7c6f9c', A: '#c0708a', J: '#5f8fa8', G: '#8a8a8a' })[name.charAt(0)] || '#7c6f9c',
+            isMobileDevice: () => false, getChatHistory: () => history,
+            getUserAvatarUrl: () => USER_AVATAR, isCombinedGroupMode: () => scIndex === 4 };
+        window.EchoTextHarness[newLabel](env).renderMessages(history);
+        await sleep(300);
+        const html = inner.innerHTML;
+        const panel = scheme => `<div class="col"><div class="lbl">wechat · ${scheme}</div><div class="et-panel static-panel" data-platform="wechat" data-et-scheme="${scheme}"><div class="et-panel-content"><div class="et-messages" data-et-role="messages"><div class="et-messages-inner" data-et-role="message-list">${html}</div></div></div></div></div>`;
+        const row = document.createElement('div');
+        row.className = 'row wechat-row';
+        row.innerHTML = `<h2>WeChat — ${sc.name}</h2><div class="cols">${panel('light')}${panel('dark')}</div>`;
+        out.prepend(row);
+    }
+
+    jQuery('#et-messages-inner').empty();
+    window.__refresh = refreshResults;
+    window.__results = results;
+    window.__done = true;
+})().catch(e => { window.__error = String(e && e.stack || e); console.error(e); });
+</script>
+</body>
+</html>

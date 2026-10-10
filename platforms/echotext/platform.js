@@ -7,7 +7,7 @@
      *
      * Templates are pure — (view, ctx) → HTML string. A message's view is its
      * entry from lib/chat-view-model.js; ctx comes from index.js:
-     *   showAvatar, verbosity ('short' | 'medium' | 'long' | null), charName
+     *   verbosity ('short' | 'medium' | 'long' | null), charName
      *   has(featureId)        whether the platform's feature is on (lib/features.js)
      *   animateReaction       message(): pop the character's reaction in
      *   escapeHtml(text)      text for HTML
