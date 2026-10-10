@@ -12175,11 +12175,11 @@ textarea.et-mem-save-snippet-edit::placeholder {
     border-radius: 4px;
 }
 
-.et-photo-card-open .et-photo-card-icon {
+.et-photo-card[aria-expanded="true"] .et-photo-card-icon {
     display: none;
 }
 
-.et-photo-card-open .et-photo-card-caption {
+.et-photo-card[aria-expanded="true"] .et-photo-card-caption {
     display: flex;
 }
 

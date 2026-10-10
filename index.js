@@ -3335,25 +3335,13 @@
 
         // Update image attachment in-place
         const existingImg = msgEl.find('.et-image-attachment');
-        const newImgHtml  = buildImageAttachmentHtml(msg, msgIndex);
+        const newImgHtml  = buildImageAttachmentHtml(msg);
         if (newImgHtml) {
             if (existingImg.length) {
                 existingImg.replaceWith(newImgHtml);
             } else {
                 msgEl.find('.et-bubble-text').after(newImgHtml);
             }
-            msgEl.find('.et-image-attachment-ready').off('click.swipeimg').on('click.swipeimg', function (e) {
-                e.stopPropagation();
-                const idx = parseInt(jQuery(this).data('image-index'), 10);
-                const m   = h[idx];
-                const navItems = h
-                    .filter(x => x?.imageAttachment?.url)
-                    .map(x => ({ url: x.imageAttachment.url, prompt: x.imageAttachment.prompt || '' }));
-                const currentUrl = m?.imageAttachment?.url || '';
-                const navIndex   = navItems.findIndex(x => x.url === currentUrl);
-                openGeneratedImageLightbox(currentUrl, m?.imageAttachment?.prompt || '',
-                    { navItems, navIndex: navIndex >= 0 ? navIndex : 0 });
-            });
         } else {
             existingImg.remove();
         }
@@ -5196,7 +5184,7 @@
 
         // Close emoji overlays when clicking outside
         jQuery(document).on('click.et-react', function (e) {
-            if (!jQuery(e.target).closest('.et-react-overlay, .et-react-btn').length) {
+            if (!jQuery(e.target).closest('.et-react-overlay, [data-et-action="react"]').length) {
                 closeAllReactOverlays();
             }
         });
@@ -5209,15 +5197,7 @@
             }
         });
 
-        // Memory highlight click → save modal (or remove modal if already saved)
-        jQuery('#et-panel').on('click', '.et-mem-highlight', function (e) {
-            e.stopPropagation();
-            if (jQuery(this).hasClass('et-mem-highlight-saved')) {
-                showMemoryRemoveModal(this);
-            } else {
-                showMemorySaveModal(this);
-            }
-        });
+        bindMessageActions();
 
         // ── iOS / mobile: keep the panel height in sync with the visual viewport ──
         // When the on-screen keyboard opens, visualViewport.height shrinks. We update
@@ -5892,7 +5872,7 @@
     /** A photo shows only its frame; tapping it reveals the description inside. */
     function buildPhotoCardHtml(desc) {
         const safeDesc = escapeHtml(desc);
-        return `<div class="et-photo-card" role="button" tabindex="0" title="Tap to view"><div class="et-photo-card-frame"><i class="fa-regular fa-image et-photo-card-icon"></i><div class="et-photo-card-caption"><span>${safeDesc || 'Photo'}</span></div></div></div>`;
+        return `<div class="et-photo-card" role="button" tabindex="0" aria-expanded="false" title="Tap to view" data-et-action="photo-toggle"><div class="et-photo-card-frame"><i class="fa-regular fa-image et-photo-card-icon"></i><div class="et-photo-card-caption"><span>${safeDesc || 'Photo'}</span></div></div></div>`;
     }
 
     /** A transfer or transfer-response card, from a view-model part (its status and display amount). */
@@ -5909,7 +5889,7 @@
         }
         const amountText = escapeHtml(part.displayAmount || 'Transfer');
         // The response tag names the currency explicitly ("$20.00")
-        const actionAttrs = actionable ? ` data-amount="${escapeHtml(part.displayAmount)}" role="button" tabindex="0"` : '';
+        const actionAttrs = actionable ? ` data-et-action="transfer-respond" data-amount="${escapeHtml(part.displayAmount)}" role="button" tabindex="0"` : '';
         return `<div class="et-transfer-card et-transfer-${state}${actionable ? ' et-transfer-actionable' : ''}"${actionAttrs}><div class="et-transfer-body"><div class="et-transfer-icon"><i class="fa-solid ${icon}"></i></div><div class="et-transfer-info"><div class="et-transfer-amount">${amountText}</div><div class="et-transfer-status">${label}</div></div></div><div class="et-transfer-footer">Transfer</div></div>`;
     }
 
@@ -5935,7 +5915,7 @@
      */
     function buildLeadingPartBubblesHtml(view, sideClass) {
         return view.parts.slice(0, -1).map((part, j) =>
-            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}">${buildPartContentHtml(part)}<button class="et-part-dots-btn" data-index="${view.index}" data-part="${j}" data-is-user="${view.isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
+            `<div class="et-bubble ${sideClass} et-bubble-part${partBubbleClass(part)}">${buildPartContentHtml(part)}<button class="et-part-dots-btn" data-et-action="part-menu" data-index="${view.index}" data-part="${j}" data-is-user="${view.isUser ? 1 : 0}" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button></div>`
         ).join('');
     }
 
@@ -6002,7 +5982,7 @@
         setTimeout(revealNext, 260);
     }
 
-    function buildImageAttachmentHtml(msg, index) {
+    function buildImageAttachmentHtml(msg) {
         const attachment = msg?.imageAttachment;
         if (!attachment || attachment.type !== 'image') return '';
 
@@ -6014,7 +5994,7 @@
             return `<div class="et-image-attachment et-image-attachment-loading"><div class="et-image-gen-indicator"><div class="et-image-gen-ring"><svg viewBox="0 0 36 36" class="et-image-gen-svg"><circle class="et-image-gen-track" cx="18" cy="18" r="14" fill="none" stroke-width="2.5"/><circle class="et-image-gen-arc" cx="18" cy="18" r="14" fill="none" stroke-width="2.5" stroke-dasharray="22 66" stroke-linecap="round"/></svg><i class="fa-solid fa-camera et-image-gen-icon"></i></div><span class="et-image-gen-label">Generating image…</span></div></div>`;
         }
 
-        return `<div class="et-image-attachment et-image-attachment-ready" data-image-index="${index}"><img src="${attachment.url}" alt="Generated image" class="et-generated-image"><div class="et-image-attachment-meta"><i class="fa-solid fa-expand"></i><span>Tap to enlarge</span></div></div>`;
+        return `<div class="et-image-attachment et-image-attachment-ready" data-et-action="image-open"><img src="${attachment.url}" alt="Generated image" class="et-generated-image"><div class="et-image-attachment-meta"><i class="fa-solid fa-expand"></i><span>Tap to enlarge</span></div></div>`;
     }
 
     function openGeneratedImageLightbox(imageUrl, promptText, options) {
@@ -6188,6 +6168,115 @@
         }
     }
 
+    // ============================================================
+    // MESSAGE ACTIONS
+    // ============================================================
+
+    /** Shows the previous version of a character message. */
+    function showPrevSwipe(msgIndex) {
+        const h = getChatHistory();
+        const msg = h[msgIndex];
+        if (!msg || !msg.swipes) return;
+        const newIdx = (msg.swipeIndex ?? 0) - 1;
+        if (newIdx < 0) return;
+        msg.swipeIndex = newIdx;
+        syncMsgFromSwipe(msg);
+        saveChatHistory(h);
+        updateSwipeInPlace(msgIndex, h);
+    }
+
+    /** Shows the next version of a character message, generating one past the last. */
+    function showNextSwipe(msgIndex) {
+        const h = getChatHistory();
+        const msg = h[msgIndex];
+        if (!msg) return;
+        const currentIdx = msg.swipeIndex ?? 0;
+        // If no swipes array yet, or we're at the last swipe → generate a new one
+        if (!msg.swipes || currentIdx >= msg.swipes.length - 1) {
+            const contextHistory = h.slice(0, msgIndex);
+            generateEchoTextSwipe(h, msgIndex, contextHistory);
+            return;
+        }
+        msg.swipeIndex = currentIdx + 1;
+        syncMsgFromSwipe(msg);
+        saveChatHistory(h);
+        updateSwipeInPlace(msgIndex, h);
+    }
+
+    /** Opens a message's generated image, with every image in the chat to step through. */
+    function openImageAttachment(msgIndex) {
+        const history = getChatHistory();
+        const msg = history[msgIndex];
+        const navItems = history
+            .filter(m => m?.imageAttachment?.url)
+            .map(m => ({ url: m.imageAttachment.url, prompt: m.imageAttachment.prompt || '' }));
+        const currentUrl = msg?.imageAttachment?.url || '';
+        const navIndex = navItems.findIndex(x => x.url === currentUrl);
+        openGeneratedImageLightbox(
+            currentUrl,
+            msg?.imageAttachment?.prompt || '',
+            { navItems, navIndex: navIndex >= 0 ? navIndex : 0 }
+        );
+    }
+
+    /**
+     * What a click on a message element does, keyed by its data-et-action. Each
+     * handler gets { el, msgIndex, isUser, partIndex }: the nearest data-index /
+     * data-is-user / data-part at or around the clicked element.
+     */
+    const MESSAGE_ACTIONS = {
+        'react': ({ el, msgIndex }) => {
+            closeAllDotMenus();
+            toggleReactOverlay(jQuery(el), msgIndex);
+        },
+        'reaction-toggle': ({ el, msgIndex }) => addReaction(msgIndex, el.dataset.reaction),
+        // The footer menu acts on the whole message, a bubble's menu on that bubble
+        'menu': ({ el, msgIndex, isUser }) => {
+            closeAllReactOverlays();
+            toggleDotsMenu(jQuery(el), msgIndex, isUser, isTetheredMode(), null);
+        },
+        'part-menu': ({ el, msgIndex, isUser, partIndex }) => {
+            closeAllReactOverlays();
+            toggleDotsMenu(jQuery(el), msgIndex, isUser, isTetheredMode(), partIndex);
+        },
+        'swipe-prev': ({ msgIndex }) => {
+            closeAllDotMenus();
+            showPrevSwipe(msgIndex);
+        },
+        'swipe-next': ({ msgIndex }) => {
+            closeAllDotMenus();
+            showNextSwipe(msgIndex);
+        },
+        'photo-toggle': ({ el }) => el.setAttribute('aria-expanded', String(el.getAttribute('aria-expanded') !== 'true')),
+        'transfer-respond': ({ el }) => openTransferResponseMenu(jQuery(el)),
+        'image-open': ({ msgIndex }) => openImageAttachment(msgIndex),
+        // A remembered phrase opens the save modal, or the remove modal once saved
+        'memory-highlight': ({ el }) => {
+            if (el.classList.contains('et-mem-highlight-saved')) showMemoryRemoveModal(el);
+            else showMemorySaveModal(el);
+        },
+    };
+
+    /** Delegated click handler for every [data-et-action] in the message list. */
+    function onMessageAction(e) {
+        const el = e.currentTarget;
+        const action = MESSAGE_ACTIONS[el.dataset.etAction];
+        if (!action) return;
+        e.stopPropagation();
+        const indexEl = el.closest('[data-index]');
+        const partEl = el.closest('[data-part]');
+        action({
+            el,
+            msgIndex: indexEl ? parseInt(indexEl.dataset.index, 10) : -1,
+            isUser: el.closest('[data-is-user]')?.dataset.isUser === '1',
+            partIndex: partEl ? parseInt(partEl.dataset.part, 10) : null,
+        });
+    }
+
+    function bindMessageActions() {
+        jQuery('#et-messages-inner').off('click.et-actions').on('click.et-actions', '[data-et-action]', onMessageAction);
+    }
+
     const RECEIPT_STATES = {
         sent: { icon: 'fa-paper-plane', label: 'Sent' },
         delivered: { icon: 'fa-check', label: 'Delivered' },
@@ -6225,7 +6314,6 @@
 
         const { DOMPurify } = SillyTavern.libs;
         const charName = getCharacterName();
-        const tethered = isTetheredMode();
         const showAvatar = settings.showAvatar !== false;
         const view = ChatViewModel.buildChatViewModel(history, {
             charName,
@@ -6264,13 +6352,13 @@
                     ${buildLeadingPartBubblesHtml(m, 'et-bubble-user')}
                     <div class="et-bubble et-bubble-user et-bubble-main${mainCardClass}">
                         ${buildPartContentHtml(mainPart)}
-                        ${m.groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
+                        ${m.groupedWithNext ? `<button class="et-part-dots-btn et-msg-dots-hover" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>` : ''}
                         <div class="et-message-footer">
                             <span class="et-message-time" title="${fullDateToolip}">${time}</span>
                             <span class="et-user-name">${safeUserName}</span>
                             ${buildReceiptHtml(m.receipt)}
                             <div class="et-bubble-actions">
-                                <button class="et-dots-btn" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                                <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="1" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
                             </div>
                         </div>
                     </div>
@@ -6291,9 +6379,9 @@
                 const swipe = m.swipe;
                 const swipeNavHtml = swipe ? `
                             <div class="et-swipe-nav">
-                                <button class="et-swipe-btn et-swipe-prev" data-index="${index}" title="Previous version"${swipe.index === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
+                                <button class="et-swipe-btn et-swipe-prev" data-et-action="swipe-prev" data-index="${index}" title="Previous version"${swipe.index === 0 ? ' disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
                                 <span class="et-swipe-counter">${swipe.index + 1} / ${swipe.count}</span>
-                                <button class="et-swipe-btn et-swipe-next${swipe.isLast ? ' et-swipe-regen' : ''}" data-index="${index}" title="${swipe.isLast ? 'Regenerate (new version)' : 'Next version'}"><i class="fa-solid fa-chevron-right"></i></button>
+                                <button class="et-swipe-btn et-swipe-next${swipe.isLast ? ' et-swipe-regen' : ''}" data-et-action="swipe-next" data-index="${index}" title="${swipe.isLast ? 'Regenerate (new version)' : 'Next version'}"><i class="fa-solid fa-chevron-right"></i></button>
                             </div>` : '';
 
                 bubbleHtml = `
@@ -6302,7 +6390,7 @@
                         ${buildLeadingPartBubblesHtml(m, 'et-bubble-char')}
                         <div class="et-bubble et-bubble-char et-bubble-main${mainCardClass}">
                             ${buildPartContentHtml(mainPart)}
-                            ${buildImageAttachmentHtml(m, index)}
+                            ${buildImageAttachmentHtml(m)}
                             ${swipeNavHtml}
                             <div class="et-message-footer">
                                 <div class="et-char-info-pill${showAvatar ? '' : ' et-pill-no-avatar'}">
@@ -6312,8 +6400,8 @@
                                 <span class="et-message-time" title="${fullDateToolip}">${time}</span>
                                 ${verbosityBadge}
                                 <div class="et-bubble-actions">
-                                    <button class="et-react-btn" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>
-                                    <button class="et-dots-btn" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+                                    <button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>
+                                    <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
                                 </div>
                             </div>
                         </div>
@@ -6358,102 +6446,6 @@
                 </div>
             `);
         }
-
-        // Bind react buttons
-        inner.find('.et-react-btn').on('click', function (e) {
-            e.stopPropagation();
-            closeAllDotMenus();
-            const btn = jQuery(this);
-            const msgIndex = parseInt(btn.data('index'));
-            toggleReactOverlay(btn, msgIndex);
-        });
-
-        inner.find('.et-reaction-pill').on('click', function (e) {
-            e.stopPropagation();
-            const msgIndex = parseInt(jQuery(this).closest('.et-message-char').data('index'));
-            const reactionId = jQuery(this).data('emoji');
-            addReaction(msgIndex, reactionId);
-        });
-
-        // Bind 3-dot menus — the footer one acts on the whole message, the per-bubble
-        // ones on a single bubble of a multi-bubble message
-        inner.find('.et-dots-btn, .et-part-dots-btn').on('click', function (e) {
-            e.stopPropagation();
-            closeAllReactOverlays();
-            const btn = jQuery(this);
-            const msgIndex = parseInt(btn.data('index'));
-            const isUser = btn.data('is-user') === 1 || btn.data('is-user') === '1';
-            // A grouped message's hover button stands in for its hidden footer menu
-            const isPartMenu = btn.hasClass('et-part-dots-btn') && !btn.hasClass('et-msg-dots-hover');
-            const partIndex = isPartMenu ? parseInt(btn.data('part')) : null;
-            toggleDotsMenu(btn, msgIndex, isUser, tethered, partIndex);
-        });
-
-        // Bind swipe navigation buttons
-        inner.find('.et-swipe-prev').on('click', function (e) {
-            e.stopPropagation();
-            closeAllDotMenus();
-            const msgIndex = parseInt(jQuery(this).data('index'));
-            const h = getChatHistory();
-            const msg = h[msgIndex];
-            if (!msg || !msg.swipes) return;
-            const newIdx = (msg.swipeIndex ?? 0) - 1;
-            if (newIdx < 0) return;
-            msg.swipeIndex = newIdx;
-            syncMsgFromSwipe(msg);
-            saveChatHistory(h);
-            updateSwipeInPlace(msgIndex, h);
-        });
-
-        inner.find('.et-swipe-next').on('click', function (e) {
-            e.stopPropagation();
-            closeAllDotMenus();
-            const msgIndex = parseInt(jQuery(this).data('index'));
-            const h = getChatHistory();
-            const msg = h[msgIndex];
-            if (!msg) return;
-            const currentIdx = msg.swipeIndex ?? 0;
-            // If no swipes array yet, or we're at the last swipe → generate a new one
-            if (!msg.swipes || currentIdx >= msg.swipes.length - 1) {
-                const contextHistory = h.slice(0, msgIndex);
-                generateEchoTextSwipe(h, msgIndex, contextHistory);
-                return;
-            }
-            if (currentIdx < msg.swipes.length - 1) {
-                // Navigate to next existing swipe
-                msg.swipeIndex = currentIdx + 1;
-                syncMsgFromSwipe(msg);
-                saveChatHistory(h);
-                updateSwipeInPlace(msgIndex, h);
-            }
-        });
-
-        inner.find('.et-photo-card').on('click', function (e) {
-            e.stopPropagation();
-            jQuery(this).toggleClass('et-photo-card-open');
-        });
-
-        inner.find('.et-transfer-actionable').on('click', function (e) {
-            e.stopPropagation();
-            openTransferResponseMenu(jQuery(this));
-        });
-
-        inner.find('.et-image-attachment-ready').on('click', function (e) {
-            e.stopPropagation();
-            const idx = parseInt(jQuery(this).data('image-index'), 10);
-            const msg = history[idx];
-            // Build nav context from all messages with image attachments (in chat order)
-            const navItems = history
-                .filter(m => m?.imageAttachment?.url)
-                .map(m => ({ url: m.imageAttachment.url, prompt: m.imageAttachment.prompt || '' }));
-            const currentUrl = msg?.imageAttachment?.url || '';
-            const navIndex = navItems.findIndex(x => x.url === currentUrl);
-            openGeneratedImageLightbox(
-                currentUrl,
-                msg?.imageAttachment?.prompt || '',
-                { navItems, navIndex: navIndex >= 0 ? navIndex : 0 }
-            );
-        });
 
         // Bind touch-swipe gesture on the last char bubble (mobile only)
         if (settings.swipedMessages && isMobileDevice() && view.lastCharIndex >= 0) {
@@ -6587,7 +6579,7 @@
         // Close on outside click (once)
         setTimeout(() => {
             jQuery(document).one('click.et-dots-outside', function (e) {
-                if (!jQuery(e.target).closest('.et-dots-menu, .et-dots-btn, .et-part-dots-btn').length) {
+                if (!jQuery(e.target).closest('.et-dots-menu, [data-et-action="menu"], [data-et-action="part-menu"]').length) {
                     closeAllDotMenus();
                 }
             });
@@ -6953,21 +6945,13 @@
             if (!reactDef) continue;
 
             const pill = jQuery(`
-                <button class="et-reaction-pill${reaction.mine ? ' et-reaction-mine' : ''}" data-emoji="${reaction.id}" title="${reactDef.label}" style="--react-color:${reactDef.color}">
+                <button class="et-reaction-pill${reaction.mine ? ' et-reaction-mine' : ''}" data-et-action="reaction-toggle" data-reaction="${reaction.id}" title="${reactDef.label}" style="--react-color:${reactDef.color}">
                     <i class="${reactDef.icon} et-reaction-icon"></i>
                     <span class="et-reaction-count">${reaction.count}</span>
                 </button>
             `);
             container.append(pill);
         }
-
-        // Bind clicks for the newly rendered pills
-        container.find('.et-reaction-pill').off('click').on('click', function (e) {
-            e.stopPropagation();
-            const idx = parseInt(jQuery(this).closest('.et-message-char').data('index'));
-            const rId = jQuery(this).data('emoji');
-            addReaction(idx, rId);
-        });
     }
 
     function addReaction(msgIndex, reactionId) {
@@ -7256,6 +7240,7 @@
             const after  = node.nodeValue.substring(idx + searchStr.length);
             const mark   = document.createElement('mark');
             mark.className = `et-mem-highlight et-mem-hl-${style}`;
+            mark.dataset.etAction = 'memory-highlight';
             mark.dataset.memCategory = category;
             mark.dataset.memLabel    = label;
             mark.dataset.memContent  = searchStr;
