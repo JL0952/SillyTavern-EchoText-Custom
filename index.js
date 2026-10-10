@@ -33,8 +33,7 @@
 
     console.log(`[EchoText] Initializing from ${BASE_URL} with query ${VERSION_QUERY}`);
 
-    function loadEchoTextModule(relativePath, globalKey) {
-        if (window[globalKey]) return;
+    function runEchoTextScript(relativePath) {
         const xhr = new XMLHttpRequest();
         // Propagate the cache-buster to all sub-modules
         const moduleUrl = `${BASE_URL}/${relativePath}${VERSION_QUERY}`;
@@ -46,6 +45,11 @@
         }
         // eslint-disable-next-line no-new-func
         new Function(xhr.responseText)();
+    }
+
+    function loadEchoTextModule(relativePath, globalKey) {
+        if (window[globalKey]) return;
+        runEchoTextScript(relativePath);
         if (!window[globalKey]) {
             throw new Error(`Module loaded but global '${globalKey}' is missing (${relativePath})`);
         }
@@ -68,13 +72,24 @@
     loadEchoTextModule('lib/rich-messages.js', 'EchoTextRichMessages');
     loadEchoTextModule('lib/features.js', 'EchoTextFeatures');
     loadEchoTextModule('lib/chat-view-model.js', 'EchoTextChatViewModel');
-    loadEchoTextModule('platforms/echotext/platform.js', 'EchoTextPlatforms');
+
+    // Platform packs (platforms/<id>/platform.js), in menu order. Their scripts are
+    // small and all load now; a pack's stylesheet loads only while it's in use.
+    // EchoText's own look must load, the others are optional.
+    const PLATFORM_IDS = ['echotext', 'test-noreact'];
+    for (const id of PLATFORM_IDS) {
+        try {
+            if (!window.EchoTextPlatforms?.[id]) runEchoTextScript(`platforms/${id}/platform.js`);
+        } catch (e) {
+            if (id === 'echotext') throw e;
+            console.error(`[EchoText] Failed to load platform '${id}':`, e);
+        }
+    }
 
     const RichMessages = window.EchoTextRichMessages;
     const Features = window.EchoTextFeatures;
     const ChatViewModel = window.EchoTextChatViewModel;
-    // The look the message list renders with (one platform for now)
-    const Platform = window.EchoTextPlatforms.echotext;
+    const Platforms = window.EchoTextPlatforms;
 
     // ============================================================
     // THEME PRESETS
@@ -610,6 +625,8 @@
         jQuery('#et_paragraph_spacing_val_panel').text((settings.paragraphSpacing || 12) + 'px');
 
 
+        populatePlatformSelects();
+
         // Populate theme dropdown
         jQuery('#et_theme_panel_container').html(buildThemeDropdownHtml(settings.theme));
         // Populate font dropdown
@@ -802,6 +819,7 @@
 
         // Bind panel settings event handlers
         bindPanelSettingsEvents();
+        bindPlatformSelects();
     }
 
     // Bind settings change events from panel to settings
@@ -2916,9 +2934,26 @@
         ]);
     }
 
+    // getActivePlatform() runs for every message while context is built, so its
+    // answer is kept until the current task ends (and dropped when the choice changes)
+    let activePlatformMemo = null;
+
+    /**
+     * The platform pack the current chat uses: the character's choice, else the
+     * default, else EchoText's own look.
+     */
+    function getActivePlatform() {
+        if (activePlatformMemo) return activePlatformMemo;
+        const key = getCharacterKey();
+        const id = (key && settings.platformByCharacter?.[key]) || settings.defaultPlatform;
+        activePlatformMemo = Platforms[id] || Platforms.echotext;
+        queueMicrotask(() => { activePlatformMemo = null; });
+        return activePlatformMemo;
+    }
+
     /** The features the current platform supports (see lib/features.js). */
     function getActiveFeatures() {
-        return Platform.features;
+        return getActivePlatform().features;
     }
 
     /** Whether the current platform supports a feature, e.g. platformHas('react'). */
@@ -4153,7 +4188,7 @@
 
         if (visible) {
             if (!inner.find('[data-et-role~="typing"]').length) {
-                const el = jQuery(Platform.templates.typing(getMessageRenderContext()).trim());
+                const el = jQuery(getActivePlatform().templates.typing(getMessageRenderContext()).trim());
                 inner.append(el);
                 if (settings.autoScroll) {
                     const messagesEl = document.getElementById('et-messages');
@@ -4182,7 +4217,7 @@
 
         if (visible) {
             if (!inner.find('[data-et-role~="image-generating"]').length) {
-                const el = jQuery(Platform.templates.imageGenerating(getMessageRenderContext()).trim());
+                const el = jQuery(getActivePlatform().templates.imageGenerating(getMessageRenderContext()).trim());
                 inner.append(el);
                 if (settings.autoScroll) {
                     const messagesEl = document.getElementById('et-messages');
@@ -5827,7 +5862,7 @@
         const revealNext = () => {
             if (!msgEl[0].isConnected) return;
             const bubble = bubbles.eq(next);
-            const typing = jQuery(Platform.templates.bubbleTyping());
+            const typing = jQuery(getActivePlatform().templates.bubbleTyping());
             bubbles.eq(next - 1).after(typing);
             scrollToEnd();
             const length = bubble.find('[data-et-role~="text"], [data-et-role~="caption"]').text().trim().length;
@@ -6123,6 +6158,78 @@
         jQuery('#et-messages-inner').off('click.et-actions').on('click.et-actions', '[data-et-action]', onMessageAction);
     }
 
+    /**
+     * Puts the active platform on the panel: its id in data-platform (its CSS is
+     * scoped under it), its stylesheet loaded only while in use, the "+" button
+     * only when it has something to attach, and the pickers in settings.
+     */
+    function syncPlatformChrome() {
+        const platform = getActivePlatform();
+        jQuery('#et-panel').attr('data-platform', platform.id);
+
+        const href = platform.stylesheet
+            ? `${BASE_URL}/platforms/${platform.id}/${platform.stylesheet}${VERSION_QUERY}`
+            : null;
+        let link = document.getElementById('et-platform-css');
+        if (link && link.getAttribute('href') !== href) {
+            link.remove();
+            link = null;
+        }
+        if (href && !link) {
+            link = document.createElement('link');
+            link.id = 'et-platform-css';
+            link.rel = 'stylesheet';
+            link.href = href;
+            document.head.appendChild(link);
+        }
+
+        const modes = Features.getComposerModes(platform.features);
+        jQuery('#et-attach-btn').toggle(Object.keys(modes).length > 0);
+        if (composeMode && !modes[composeMode]) setComposeMode(null);
+        populatePlatformSelects();
+    }
+
+    /** Fills the platform pickers in both settings views: the default, and the current character's. */
+    function populatePlatformSelects() {
+        const options = PLATFORM_IDS.filter(id => Platforms[id])
+            .map(id => `<option value="${id}">${escapeHtml(Platforms[id].name)}</option>`).join('');
+        const charKey = getCharacterKey();
+        const charChoice = charKey ? settings.platformByCharacter?.[charKey] : null;
+        jQuery('#et_platform_default, #et_platform_default_panel')
+            .html(options)
+            .val(Platforms[settings.defaultPlatform] ? settings.defaultPlatform : 'echotext');
+        jQuery('#et_platform_character, #et_platform_character_panel')
+            .html(`<option value="">Use default</option>${options}`)
+            .val(Platforms[charChoice] ? charChoice : '')
+            .prop('disabled', !charKey);
+        jQuery('#et_platform_character_label, #et_platform_character_label_panel')
+            .text(charKey ? `Platform for ${getCharacterName()}` : 'Platform for this character');
+    }
+
+    function bindPlatformSelects() {
+        jQuery(document).off('change.et-platform')
+            .on('change.et-platform', '#et_platform_default, #et_platform_default_panel', function () {
+                settings.defaultPlatform = this.value;
+                onPlatformChoiceChanged();
+            })
+            .on('change.et-platform', '#et_platform_character, #et_platform_character_panel', function () {
+                const charKey = getCharacterKey();
+                if (!charKey) return;
+                settings.platformByCharacter = settings.platformByCharacter || {};
+                if (this.value) settings.platformByCharacter[charKey] = this.value;
+                else delete settings.platformByCharacter[charKey];
+                onPlatformChoiceChanged();
+            });
+    }
+
+    /** A platform choice changed: re-render the chat with it (the history stays as it is). */
+    function onPlatformChoiceChanged() {
+        saveSettings();
+        activePlatformMemo = null;
+        populatePlatformSelects();
+        if (panelOpen) renderMessages(getChatHistory(), true);
+    }
+
     // The view of each message on screen, by index, so refreshMessages() replaces only what changed
     let renderedViews = new Map();
 
@@ -6202,7 +6309,7 @@
             ctx = ctx || getMessageRenderContext();
             const expanded = oldEl.find('[aria-expanded]').map((i, el) => el.getAttribute('aria-expanded')).get();
             // The character's reaction pops in only when it's new
-            const html = Platform.templates.message(m, { ...ctx, animateReaction: m.charReaction !== prev?.charReaction });
+            const html = getActivePlatform().templates.message(m, { ...ctx, animateReaction: m.charReaction !== prev?.charReaction });
             const msgEl = jQuery(html.trim()).attr('data-et-refreshed', '');
             msgEl.find('[aria-expanded]').each((i, el) => {
                 if (expanded[i]) el.setAttribute('aria-expanded', expanded[i]);
@@ -6227,27 +6334,29 @@
         const messagesEl = document.getElementById('et-messages');
         const savedScrollTop = (preserveScroll && messagesEl) ? messagesEl.scrollTop : null;
 
+        syncPlatformChrome();
         inner.empty();
         renderedViews = new Map();
 
         if (!history || history.length === 0) {
             const char = getCurrentCharacter();
             if (!char) { showNoCharacterMessage(); return; }
-            inner.html(Platform.templates.emptyChat());
+            inner.html(getActivePlatform().templates.emptyChat());
             return;
         }
 
+        const platform = getActivePlatform();
         const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions());
         const ctx = getMessageRenderContext();
         renderedViews = new Map();
         view.messages.forEach((m) => {
-            inner.append(Platform.templates.message(m, ctx));
+            inner.append(platform.templates.message(m, ctx));
             decorateMessage(inner.children().last(), m);
             renderedViews.set(m.index, { signature: JSON.stringify(m), charReaction: m.charReaction });
         });
 
         if (showTypingIndicator) {
-            inner.append(Platform.templates.typing(ctx));
+            inner.append(platform.templates.typing(ctx));
         }
 
         // Bind touch-swipe gesture on the last char bubble (mobile only)
@@ -6431,7 +6540,7 @@
         if (oldEl.find('[contenteditable="true"]').length) return;
 
         const view = ChatViewModel.buildChatViewModel(history, getChatViewOptions()).messages[msgIndex];
-        const html = Platform.templates.message({ ...view, parts: [{ type: 'text', text: '' }] },
+        const html = getActivePlatform().templates.message({ ...view, parts: [{ type: 'text', text: '' }] },
             { ...getMessageRenderContext(), animateReaction: false });
         const msgEl = jQuery(html.trim()).attr('data-et-refreshed', '');
         oldEl.replaceWith(msgEl);
