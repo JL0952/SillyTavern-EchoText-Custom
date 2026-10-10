@@ -113,10 +113,6 @@
     // Completion requests in flight — once the model is writing, a new user text
     // waits for a follow-up reply instead of cancelling it
     let activeCompletionRequests = 0;
-    const COMPOSE_MODES = {
-        photo: { label: 'Photo', icon: 'fa-image', placeholder: 'Describe the photo you\'re sending...' },
-        transfer: { label: 'Transfer', icon: 'fa-money-bill-transfer', placeholder: 'Amount to transfer' },
-    };
     let hasUnreadCharacterMessage = false;
     let emotionSystem = null;
     let proactiveMessaging = null;
@@ -5380,8 +5376,9 @@
      * the description / amount.
      */
     function setComposeMode(mode) {
-        composeMode = COMPOSE_MODES[mode] ? mode : null;
-        const config = COMPOSE_MODES[composeMode];
+        const modes = Features.getComposerModes(getActiveFeatures());
+        composeMode = modes[mode] ? mode : null;
+        const config = modes[composeMode];
         const input = jQuery('#et-input');
         jQuery('#et-attach-btn')
             .toggleClass('et-attach-btn-active', !!config)
@@ -5411,9 +5408,11 @@
             return;
         }
         closeAllDotMenus();
-        const itemsHtml = Object.entries(COMPOSE_MODES).map(([id, m]) =>
+        const itemsHtml = Object.entries(Features.getComposerModes(getActiveFeatures())).map(([id, m]) =>
             `<button class="et-dots-item" data-mode="${id}"><i class="fa-solid ${m.icon}"></i><span>${m.label}</span></button>`
         ).join('');
+        // A platform without photos or transfers has nothing to attach
+        if (!itemsHtml) return;
         const menu = jQuery(`<div class="et-dots-menu et-attach-menu">${itemsHtml}</div>`);
         jQuery('#et-panel').append(menu);
 
@@ -6133,6 +6132,7 @@
             charName: getCharacterName(),
             userName: getUserName(),
             reactionIds: getReactionIds(),
+            features: getActiveFeatures(),
             combineMode: !!(groupManager && groupManager.isGroupSession() && groupManager.isCombineMode()),
             swipes: !!settings.swipedMessages,
             memoryHighlights: !!(settings.memoryEnabled && settings.memoryAutoExtract),
@@ -6148,6 +6148,7 @@
             verbosity: charKey && settings.verbosityByCharacter ? settings.verbosityByCharacter[charKey] : null,
             charName: getCharacterName(),
             animateReaction: true,
+            has: platformHas,
             escapeHtml,
             sanitize: text => DOMPurify.sanitize(text, { ALLOWED_TAGS: [] }),
             formatText: formatMessageText,

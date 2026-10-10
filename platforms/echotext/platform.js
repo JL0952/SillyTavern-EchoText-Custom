@@ -8,6 +8,7 @@
      * Templates are pure — (view, ctx) → HTML string. A message's view is its
      * entry from lib/chat-view-model.js; ctx comes from index.js:
      *   showAvatar, verbosity ('short' | 'medium' | 'long' | null), charName
+     *   has(featureId)        whether the platform's feature is on (lib/features.js)
      *   animateReaction       message(): pop the character's reaction in
      *   escapeHtml(text)      text for HTML
      *   sanitize(text)        plain text with any tags stripped
@@ -197,7 +198,7 @@
                             <span class="et-message-time" title="${fullDateToolip}">${time}</span>
                             ${verbosityBadge(ctx.verbosity)}
                             <div class="et-bubble-actions">
-                                <button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>
+                                ${ctx.has('react') ? `<button class="et-react-btn" data-et-action="react" data-index="${index}" title="React"><i class="fa-regular fa-face-smile"></i></button>` : ''}
                                 <button class="et-dots-btn" data-et-action="menu" data-index="${index}" data-is-user="0" title="More options"><i class="fa-solid fa-ellipsis-vertical"></i></button>
                             </div>
                         </div>

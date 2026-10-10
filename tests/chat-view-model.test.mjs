@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 // Loaded the way index.js loads its modules: each file sets a global on `window`
 globalThis.window = {};
-for (const file of ['rich-messages.js', 'chat-view-model.js']) {
+for (const file of ['rich-messages.js', 'features.js', 'chat-view-model.js']) {
     new Function(readFileSync(new URL(`../lib/${file}`, import.meta.url), 'utf8'))();
 }
 const { buildChatViewModel, getMessageDisplayParts, getStoredReactions, normalizeReactionStore } = window.EchoTextChatViewModel;
@@ -202,4 +202,41 @@ test('the history is not modified', () => {
 test('an empty or missing history gives an empty list', () => {
     assert.deepEqual(buildChatViewModel([]), { messages: [], lastCharIndex: -1 });
     assert.deepEqual(buildChatViewModel(null), { messages: [], lastCharIndex: -1 });
+});
+
+test('without reactions: reaction-only replies, tapbacks and character reactions disappear', () => {
+    const history = [
+        user('one', 0, { charReaction: 'like' }),
+        char('<react>heart</react>', 1),
+        user('two', 2),
+        char('ok\n<react>haha</react>', 3, { reactions: { fire: { count: 1, mine: true } } }),
+        char('<react>wow</react>', 4, { imageAttachment: { type: 'image', status: 'ready', url: 'x.png' } }),
+    ];
+    const view = build(history, { features: ['photo', 'transfer'] });
+    assert.deepEqual(view.map(m => m.index), [0, 2, 3, 4]);
+    assert.deepEqual(view.map(m => m.charReaction), [null, null, null, null]);
+    assert.deepEqual(view[2].reactions, []);
+    assert.deepEqual(view[2].parts, [{ type: 'text', text: 'ok' }]);
+    // A reply that was only a reaction still shows its image
+    assert.deepEqual(view[3].parts, [{ type: 'text', text: '' }]);
+    // The history keeps everything, and all features show it again
+    assert.deepEqual(build(history).map(m => m.index), [0, 1, 2, 3, 4]);
+    assert.equal(build(history)[0].charReaction, 'heart');
+});
+
+test('hidden messages do not split groups or time dividers', () => {
+    const history = [user('a', 0), char('<react>heart</react>', 1), user('b', 2), char('c', 3)];
+    const view = build(history, { features: ['photo', 'transfer'] });
+    assert.deepEqual(view.map(m => [m.index, m.groupedWithNext, m.showTimeDivider]), [[0, true, true], [2, false, false], [3, false, false]]);
+});
+
+test('without photos or transfers, their cards become the same notes the model sees', () => {
+    const history = [char('look\n<photo>a cat</photo>\n<transfer>52</transfer>', 0), user('<transfer_accept></transfer_accept>', 1)];
+    const view = build(history, { features: ['react'] });
+    assert.deepEqual(view[0].parts, [
+        { type: 'text', text: 'look' },
+        { type: 'text', text: '[Photo: a cat]' },
+        { type: 'text', text: '[Transfer: ¥52.00]' },
+    ]);
+    assert.deepEqual(view[1].parts, [{ type: 'text', text: '[Accepted transfer]' }]);
 });
